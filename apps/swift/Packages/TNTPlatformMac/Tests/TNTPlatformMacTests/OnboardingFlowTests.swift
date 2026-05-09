@@ -38,7 +38,7 @@ final class OnboardingFlowTests: XCTestCase {
         var flow = OnboardingFlow()
         _ = flow.continueFromIntro()
         _ = flow.microphoneDecision(granted: true)
-        XCTAssertEqual(flow.inputMonitoringDecision(granted: true), .readyForApiKey)
+        XCTAssertEqual(flow.inputMonitoringDecision(granted: true), .connectingOpenAI)
     }
 
     func testInputMonitoringDeniedHaltsOnDenialBanner() {
@@ -65,12 +65,21 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertNotEqual(flow.step, .requestingInputMonitoring)
     }
 
-    func testTerminalStepIsReadyForApiKey() {
+    func testInputMonitoringGrantedAdvancesToConnectingOpenAI() {
         var flow = OnboardingFlow()
         _ = flow.continueFromIntro()
         _ = flow.microphoneDecision(granted: true)
         _ = flow.inputMonitoringDecision(granted: true)
-        XCTAssertEqual(flow.step, .readyForApiKey)
-        XCTAssertTrue(flow.isComplete, "readyForApiKey must report flow as complete.")
+        XCTAssertEqual(flow.step, .connectingOpenAI)
+        XCTAssertFalse(flow.isComplete, "Connecting OpenAI is not yet complete — the BYOK key must be saved first.")
+    }
+
+    func testApiKeySavedReachesTerminalCompleted() {
+        var flow = OnboardingFlow()
+        _ = flow.continueFromIntro()
+        _ = flow.microphoneDecision(granted: true)
+        _ = flow.inputMonitoringDecision(granted: true)
+        XCTAssertEqual(flow.apiKeySaved(), .completed)
+        XCTAssertTrue(flow.isComplete)
     }
 }

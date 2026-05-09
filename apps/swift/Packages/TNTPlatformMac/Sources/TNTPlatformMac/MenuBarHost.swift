@@ -36,7 +36,8 @@ public final class MenuBarHost {
         initialState: AppState = .idle,
         permissionStatus: PermissionStatus = .ok,
         onOpenInputMonitoringSettings: MenuAction? = nil,
-        onRetryInputMonitoring: MenuAction? = nil
+        onRetryInputMonitoring: MenuAction? = nil,
+        onReplaceAPIKey: MenuAction? = nil
     ) {
         self.state = initialState
         self.permissionStatus = permissionStatus
@@ -44,6 +45,7 @@ public final class MenuBarHost {
         self.forwarder = MenuActionForwarder(
             openSettings: onOpenInputMonitoringSettings,
             retry: onRetryInputMonitoring,
+            replaceAPIKey: onReplaceAPIKey,
             setState: nil
         )
         // Wire the debug-only state flipper after init so the closure can
@@ -111,6 +113,8 @@ public final class MenuBarHost {
 
         menu.addItem(NSMenuItem.separator())
 
+        forwarder.attachReplaceAPIKeyItem(into: menu)
+
         let quit = NSMenuItem(
             title: "Quit TNT",
             action: #selector(NSApplication.terminate(_:)),
@@ -136,16 +140,34 @@ private final class MenuActionForwarder: NSObject {
 
     private let openSettingsAction: MenuBarHost.MenuAction?
     private let retryAction: MenuBarHost.MenuAction?
+    private let replaceAPIKeyAction: MenuBarHost.MenuAction?
     var setStateAction: ((AppState) -> Void)?
 
     init(
         openSettings: MenuBarHost.MenuAction?,
         retry: MenuBarHost.MenuAction?,
+        replaceAPIKey: MenuBarHost.MenuAction?,
         setState: ((AppState) -> Void)?
     ) {
         self.openSettingsAction = openSettings
         self.retryAction = retry
+        self.replaceAPIKeyAction = replaceAPIKey
         self.setStateAction = setState
+    }
+
+    func attachReplaceAPIKeyItem(into menu: NSMenu) {
+        guard replaceAPIKeyAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Replace API Key…",
+            action: #selector(replaceAPIKey(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func replaceAPIKey(_ sender: NSMenuItem) {
+        replaceAPIKeyAction?()
     }
 
     func attachOpenSettingsItem(into menu: NSMenu) {
