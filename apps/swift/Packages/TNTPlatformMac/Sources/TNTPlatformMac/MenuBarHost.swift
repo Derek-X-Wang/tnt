@@ -34,6 +34,11 @@ public final class MenuBarHost {
     /// so the User can see live VU motion without an extra window.
     public private(set) var micLevelDB: Float?
 
+    /// Last operational error to surface to the User (e.g. invalid
+    /// OpenAI key during the M0/S7 WS roundtrip). Rendered as a banner
+    /// row in the menu when non-nil.
+    public private(set) var lastErrorMessage: String?
+
     private let statusItem: NSStatusItem
     private let forwarder: MenuActionForwarder
 
@@ -42,7 +47,8 @@ public final class MenuBarHost {
         permissionStatus: PermissionStatus = .ok,
         onOpenInputMonitoringSettings: MenuAction? = nil,
         onRetryInputMonitoring: MenuAction? = nil,
-        onReplaceAPIKey: MenuAction? = nil
+        onReplaceAPIKey: MenuAction? = nil,
+        onTestWSRoundtrip: MenuAction? = nil
     ) {
         self.state = initialState
         self.permissionStatus = permissionStatus
@@ -51,6 +57,7 @@ public final class MenuBarHost {
             openSettings: onOpenInputMonitoringSettings,
             retry: onRetryInputMonitoring,
             replaceAPIKey: onReplaceAPIKey,
+            testWSRoundtrip: onTestWSRoundtrip,
             setState: nil
         )
         // Wire the debug-only state flipper after init so the closure can
@@ -74,6 +81,13 @@ public final class MenuBarHost {
     public func setPermissionStatus(_ newStatus: PermissionStatus) {
         guard permissionStatus != newStatus else { return }
         permissionStatus = newStatus
+        rebuild()
+    }
+
+    /// Set or clear the operational error banner.
+    public func setLastErrorMessage(_ message: String?) {
+        guard lastErrorMessage != message else { return }
+        lastErrorMessage = message
         rebuild()
     }
 
@@ -142,6 +156,13 @@ public final class MenuBarHost {
             forwarder.attachRetryItem(into: menu)
         }
 
+        if let error = lastErrorMessage {
+            menu.addItem(NSMenuItem.separator())
+            let banner = NSMenuItem(title: "⚠ \(error)", action: nil, keyEquivalent: "")
+            banner.isEnabled = false
+            menu.addItem(banner)
+        }
+
         menu.addItem(NSMenuItem.separator())
 
         forwarder.attachReplaceAPIKeyItem(into: menu)
@@ -157,6 +178,7 @@ public final class MenuBarHost {
 #if DEBUG
         menu.addItem(NSMenuItem.separator())
         menu.addItem(forwarder.makeDebugStateMenuItem())
+        forwarder.attachTestWSRoundtripItem(into: menu)
 #endif
 
         return menu
@@ -172,17 +194,20 @@ private final class MenuActionForwarder: NSObject {
     private let openSettingsAction: MenuBarHost.MenuAction?
     private let retryAction: MenuBarHost.MenuAction?
     private let replaceAPIKeyAction: MenuBarHost.MenuAction?
+    private let testWSRoundtripAction: MenuBarHost.MenuAction?
     var setStateAction: ((AppState) -> Void)?
 
     init(
         openSettings: MenuBarHost.MenuAction?,
         retry: MenuBarHost.MenuAction?,
         replaceAPIKey: MenuBarHost.MenuAction?,
+        testWSRoundtrip: MenuBarHost.MenuAction?,
         setState: ((AppState) -> Void)?
     ) {
         self.openSettingsAction = openSettings
         self.retryAction = retry
         self.replaceAPIKeyAction = replaceAPIKey
+        self.testWSRoundtripAction = testWSRoundtrip
         self.setStateAction = setState
     }
 
@@ -200,6 +225,23 @@ private final class MenuActionForwarder: NSObject {
     @objc func replaceAPIKey(_ sender: NSMenuItem) {
         replaceAPIKeyAction?()
     }
+
+#if DEBUG
+    func attachTestWSRoundtripItem(into menu: NSMenu) {
+        guard testWSRoundtripAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Test WS Roundtrip",
+            action: #selector(testWSRoundtrip(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func testWSRoundtrip(_ sender: NSMenuItem) {
+        testWSRoundtripAction?()
+    }
+#endif
 
     func attachOpenSettingsItem(into menu: NSMenu) {
         guard openSettingsAction != nil else { return }
