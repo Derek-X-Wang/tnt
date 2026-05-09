@@ -421,6 +421,7 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -505,6 +506,7 @@
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

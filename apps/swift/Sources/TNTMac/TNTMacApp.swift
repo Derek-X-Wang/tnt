@@ -47,12 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkeyHost: HotkeyHost?
     private var onboardingHost: OnboardingHost?
     private var byokHost: BYOKHost?
+    private var audioCapture: VoiceProcessingIOAudioCapture?
+    private var captureDrainTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Force-load the placeholder modules so any compile-error or
         // missing-symbol regression in those packages fails the TNTMac
         // build, not a later slice that finally imports them for real.
-        _ = TNTRealtimeModule.self
         _ = TNTCognitiveModule.self
         _ = TNTMemoryModule.self
         _ = TNTIngestModule.self
@@ -90,13 +91,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         )
 
-        let host = HotkeyHost(chord: chord) { [weak menu] event in
+        let capture = VoiceProcessingIOAudioCapture()
+        self.audioCapture = capture
+
+        let host = HotkeyHost(chord: chord) { [weak self, weak menu] event in
             guard let menu else { return }
             switch event {
             case .startListening:
                 menu.setState(.listening)
+                self?.startMicCapture()
             case .stopListening:
                 menu.setState(.idle)
+                menu.setMicLevel(nil)
+                self?.stopMicCapture()
             case .permissionChanged(let auth):
                 menu.setPermissionStatus(auth == .granted ? .ok : .inputMonitoringRequired)
             }
@@ -106,6 +113,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.hotkeyHost = host
 
         host.start()
+    }
+
+    private func startMicCapture() {
+        guard let capture = audioCapture else { return }
+        // Cancel any prior drain — `.listening` should always start
+        // from a clean stream.
+        captureDrainTask?.cancel()
+
+        captureDrainTask = Task { [weak self] in
+            do {
+                try await capture.start()
+            } catch {
+                NSLog("[TNT] AudioCapture.start failed: \(error)")
+                return
+            }
+            for await frame in capture.frames {
+                if Task.isCancelled { break }
+                let dB = AudioLevel.peakDB(from: frame)
+                await MainActor.run {
+                    self?.menuBarHost?.setMicLevel(dB)
+                }
+            }
+        }
+    }
+
+    private func stopMicCapture() {
+        captureDrainTask?.cancel()
+        captureDrainTask = nil
+        if let capture = audioCapture {
+            Task { await capture.stop() }
+        }
     }
 
     private func presentReplaceAPIKey() {

@@ -9,5 +9,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "TNTRealtime"),
+        .testTarget(
+            name: "TNTRealtimeTests",
+            dependencies: ["TNTRealtime"]
+        ),
     ]
 )
