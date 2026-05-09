@@ -2,9 +2,11 @@
 // BYOK config, the WebSocket to OpenAI Realtime, and the Local Ingest port.
 // One process per User (v0 is single-tenant by design — see CONTEXT.md).
 //
-// As of M0/S2 the app is menu-bar-only: `LSUIElement = YES` keeps it out
-// of the Dock and out of the app switcher; the only user-visible surface
-// is the State Lamp owned by `MenuBarHost` in `TNTPlatformMac`.
+// As of M0/S3 the composition root wires `HotkeyHost` (global ⌥Space
+// listener) to `MenuBarHost` (State Lamp). The first chord press
+// triggers the Input Monitoring TCC prompt; if denied, the menu shows
+// "⚠ Input Monitoring required" + Open Settings + Retry. Mic capture
+// is intentionally not wired here — that lands in M0/S6.
 
 import AppKit
 import SwiftUI
@@ -34,10 +36,11 @@ struct TNTMacApp: App {
 }
 
 /// Owns long-lived AppKit resources that don't fit cleanly inside a
-/// SwiftUI `Scene` — most importantly the `MenuBarHost` `NSStatusItem`.
+/// SwiftUI `Scene` — most importantly `MenuBarHost` and `HotkeyHost`.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarHost: MenuBarHost?
+    private var hotkeyHost: HotkeyHost?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Force-load every package so any compile-error or missing-symbol
@@ -49,6 +52,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = TNTMemoryModule.self
         _ = TNTIngestModule.self
 
-        menuBarHost = MenuBarHost(initialState: .idle)
+        let chord = HotkeyChord.load()
+
+        // Build the MenuBarHost first so the HotkeyHost listener has a
+        // stable target. Permission callbacks bounce back to the
+        // hotkey host once it exists.
+        let menu = MenuBarHost(
+            initialState: .idle,
+            permissionStatus: .ok,
+            onOpenInputMonitoringSettings: { [weak self] in
+                self?.openInputMonitoringSettings()
+            },
+            onRetryInputMonitoring: { [weak self] in
+                self?.hotkeyHost?.recheckAuthorization()
+            }
+        )
+
+        let host = HotkeyHost(chord: chord) { [weak menu] event in
+            guard let menu else { return }
+            switch event {
+            case .startListening:
+                menu.setState(.listening)
+            case .stopListening:
+                menu.setState(.idle)
+            case .permissionChanged(let auth):
+                menu.setPermissionStatus(auth == .granted ? .ok : .inputMonitoringRequired)
+            }
+        }
+
+        self.menuBarHost = menu
+        self.hotkeyHost = host
+
+        host.start()
+    }
+
+    /// Opens System Settings → Privacy & Security → Input Monitoring.
+    /// The pane URL is the documented deep-link for that TCC category.
+    private func openInputMonitoringSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
+        NSWorkspace.shared.open(url)
     }
 }
