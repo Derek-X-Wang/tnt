@@ -2,22 +2,21 @@
 // BYOK config, the WebSocket to OpenAI Realtime, and the Local Ingest port.
 // One process per User (v0 is single-tenant by design — see CONTEXT.md).
 //
-// Launch sequence (M0/S2-S5):
+// Launch sequence (M0/S2-S8):
 //   1. If `tnt.has_onboarded` is unset, show `OnboardingHost`. The User
 //      reads the privacy posture, clicks Continue, grants Microphone
 //      and Input Monitoring TCC, and connects an OpenAI BYOK key.
 //   2. After onboarding (or immediately on subsequent launches),
-//      install the State Lamp (`MenuBarHost`) and the global ⌥Space
-//      listener (`HotkeyHost`). The menu offers a "Replace API Key…"
-//      item that opens `BYOKHost` for in-app key cycling.
+//      install the State Lamp (`MenuBarHost`), the global ⌥Space
+//      listener (`HotkeyHost`), and the `VoiceTurnController` that
+//      glues hotkey → mic capture → Realtime WS → speakers.
+//   3. The DEBUG menu carries "Test WS Roundtrip" (M0/S7) and a
+//      "Replace API Key…" item that opens `BYOKHost` for in-app key
+//      cycling.
 
 import AppKit
 import SwiftUI
 
-// Each package import is intentional: TNTMac is the composition root and
-// must link every TNT package so missing-symbol regressions surface here.
-// The four placeholder modules will be replaced with real types as later
-// milestones land (Cognitive Engine M1, Memory Store + Ingest M2, etc.).
 import TNTCore
 import TNTRealtime
 import TNTCognitive
@@ -38,23 +37,19 @@ struct TNTMacApp: App {
     }
 }
 
-/// Owns long-lived AppKit resources that don't fit cleanly inside a
-/// SwiftUI `Scene` — `MenuBarHost`, `HotkeyHost`, the one-shot
-/// `OnboardingHost`, and the on-demand `BYOKHost`.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarHost: MenuBarHost?
     private var hotkeyHost: HotkeyHost?
     private var onboardingHost: OnboardingHost?
     private var byokHost: BYOKHost?
-    private var audioCapture: VoiceProcessingIOAudioCapture?
-    private var captureDrainTask: Task<Void, Never>?
+    private var voiceTurnController: VoiceTurnController?
     private var wsTestTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Force-load the placeholder modules so any compile-error or
-        // missing-symbol regression in those packages fails the TNTMac
-        // build, not a later slice that finally imports them for real.
+        // Force-load placeholder modules so missing-symbol regressions
+        // surface in the TNTMac build, not a later slice that finally
+        // imports them for real.
         _ = TNTCognitiveModule.self
         _ = TNTMemoryModule.self
         _ = TNTIngestModule.self
@@ -94,66 +89,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.runWSRoundtripTest()
             }
         )
+        self.menuBarHost = menu
 
-        let capture = VoiceProcessingIOAudioCapture()
-        self.audioCapture = capture
+        let voiceController = VoiceTurnController(
+            menuBarHost: menu,
+            apiKeyProvider: { try TNTCredentials.openAIKey() }
+        )
+        self.voiceTurnController = voiceController
 
         let host = HotkeyHost(chord: chord) { [weak self, weak menu] event in
             guard let menu else { return }
             switch event {
             case .startListening:
-                menu.setState(.listening)
-                self?.startMicCapture()
+                Task { await self?.voiceTurnController?.startListening() }
             case .stopListening:
-                menu.setState(.idle)
-                menu.setMicLevel(nil)
-                self?.stopMicCapture()
+                Task { await self?.voiceTurnController?.stopListening() }
             case .permissionChanged(let auth):
                 menu.setPermissionStatus(auth == .granted ? .ok : .inputMonitoringRequired)
             }
         }
 
-        self.menuBarHost = menu
         self.hotkeyHost = host
-
         host.start()
     }
 
-    private func startMicCapture() {
-        guard let capture = audioCapture else { return }
-        // Cancel any prior drain — `.listening` should always start
-        // from a clean stream.
-        captureDrainTask?.cancel()
-
-        captureDrainTask = Task { [weak self] in
-            do {
-                try await capture.start()
-            } catch {
-                NSLog("[TNT] AudioCapture.start failed: \(error)")
-                return
-            }
-            for await frame in capture.frames {
-                if Task.isCancelled { break }
-                let dB = AudioLevel.peakDB(from: frame)
-                await MainActor.run {
-                    self?.menuBarHost?.setMicLevel(dB)
-                }
-            }
-        }
-    }
-
-    private func stopMicCapture() {
-        captureDrainTask?.cancel()
-        captureDrainTask = nil
-        if let capture = audioCapture {
-            Task { await capture.stop() }
-        }
-    }
-
     private func presentReplaceAPIKey() {
-        // Tear down any previous host first; opening a second window
-        // while the first is alive should bring the existing one to
-        // front rather than stacking duplicates.
         if let existing = byokHost {
             existing.present()
             return
@@ -170,26 +130,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(url)
     }
 
-    /// Hidden DEBUG-only roundtrip: connect to OpenAI Realtime, ask for
-    /// "Say hello in English.", play back the audio deltas. Used to
-    /// validate the WS path without wiring mic input (M0/S8).
+    /// Hidden DEBUG-only one-shot WS round-trip — kept for M0/S7
+    /// validation. Uses its own ephemeral client so it does not
+    /// interfere with the long-lived Voice Turn connection.
     private func runWSRoundtripTest() {
         wsTestTask?.cancel()
         wsTestTask = Task { [weak self] in
-            guard let self else { return }
-            await self.runWSRoundtripTestImpl()
+            await self?.runWSRoundtripTestImpl()
         }
     }
 
     private func runWSRoundtripTestImpl() async {
         menuBarHost?.setLastErrorMessage(nil)
+
         let key: String
         do {
             key = try TNTCredentials.openAIKey()
         } catch {
             menuBarHost?.setState(.idle)
             menuBarHost?.setLastErrorMessage("OpenAI API key missing — Replace API Key…")
-            NSLog("[TNT] WS test: missing API key — \(error)")
             return
         }
 
@@ -197,7 +156,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try player.start()
         } catch {
-            NSLog("[TNT] WS test: could not start AudioOutputPlayer — \(error)")
             return
         }
 
@@ -205,26 +163,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try await client.connect()
         } catch {
-            NSLog("[TNT] WS test: connect failed — \(error)")
             player.stop()
             return
         }
 
         menuBarHost?.setState(.thinking)
-
-        // Ask for a spoken hello.
-        do {
-            try await client.send(ResponseCreate(response: .init(
-                modalities: ["audio", "text"],
-                instructions: "Say hello in English."
-            )))
-        } catch {
-            NSLog("[TNT] WS test: send failed — \(error)")
-            await client.disconnect()
-            player.stop()
-            menuBarHost?.setState(.idle)
-            return
-        }
+        try? await client.send(ResponseCreate(response: .init(
+            modalities: ["audio", "text"],
+            instructions: "Say hello in English."
+        )))
 
         for await event in client.inbound {
             if Task.isCancelled { break }
@@ -239,7 +186,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .error(let err):
                 let summary = err.error.message ?? err.error.code ?? "Realtime error"
                 menuBarHost?.setLastErrorMessage("Realtime: \(summary)")
-                NSLog("[TNT] WS test: error event — code=\(err.error.code ?? "?") message=\(err.error.message ?? "?")")
                 break
             case .sessionCreated, .unknown:
                 continue
@@ -249,7 +195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         await client.disconnect()
-        // Give the player a beat to drain the queue before tearing down.
         try? await Task.sleep(nanoseconds: 300_000_000)
         player.stop()
         menuBarHost?.setState(.idle)

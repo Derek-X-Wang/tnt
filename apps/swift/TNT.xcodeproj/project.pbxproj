@@ -17,6 +17,7 @@
 		9D074D8985BC8FBFF1E395BE /* TNTRealtime in Frameworks */ = {isa = PBXBuildFile; productRef = 325FCA7A3650733EE55230FF /* TNTRealtime */; };
 		D1DCF28F6AC957CE568B6B95 /* TNTCognitive in Frameworks */ = {isa = PBXBuildFile; productRef = 25F2EBAB140B44EF1580C4E5 /* TNTCognitive */; };
 		D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */ = {isa = PBXBuildFile; productRef = 0D964440E8884A31BF6F8C31 /* TNTMemory */; };
+		DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +25,7 @@
 		2AAF15947F7A86D1FCC73E8D /* TNTiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TNTiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		35552747E5FF0024465F0D5B /* TNTCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTCore; path = Packages/TNTCore; sourceTree = SOURCE_ROOT; };
 		568E2A9C19995F5A2C818AD5 /* TNTCognitive */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTCognitive; path = Packages/TNTCognitive; sourceTree = SOURCE_ROOT; };
+		660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTurnController.swift; sourceTree = "<group>"; };
 		67179AA7D49680428C1F081F /* TNTPlatformMac */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTPlatformMac; path = Packages/TNTPlatformMac; sourceTree = SOURCE_ROOT; };
 		726D3A00C25680F5A209768C /* TNTMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TNTMacApp.swift; sourceTree = "<group>"; };
 		921CC1BAD17D6C23808EB0F8 /* TNTCLI */ = {isa = PBXFileReference; includeInIndex = 0; path = TNTCLI; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -121,6 +123,7 @@
 			isa = PBXGroup;
 			children = (
 				726D3A00C25680F5A209768C /* TNTMacApp.swift */,
+				660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */,
 			);
 			path = TNTMac;
 			sourceTree = "<group>";
@@ -256,6 +259,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */,
+				DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

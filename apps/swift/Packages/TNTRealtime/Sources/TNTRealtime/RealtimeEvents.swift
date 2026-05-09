@@ -28,6 +28,14 @@ public struct InputAudioBufferClear: Codable, Sendable, Equatable {
     }
 }
 
+public struct InputAudioBufferCommit: Codable, Sendable, Equatable {
+    public var type: String
+
+    public init() {
+        self.type = "input_audio_buffer.commit"
+    }
+}
+
 public struct ResponseCancel: Codable, Sendable, Equatable {
     public var type: String
 
