@@ -1,0 +1,50 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Local TNT runtime files (defensive — these live in ~/.tnt/, not the repo)
+.tnt/
+ingest-token
+memory.sqlite
+
+# Signing secrets (must never be committed)
+*.p12
+*.cer
+AuthKey_*.p8
+notarization-creds.json
+
+# Build artifacts
+*.dmg
+*.pkg
+*.zip
+release-staging/
