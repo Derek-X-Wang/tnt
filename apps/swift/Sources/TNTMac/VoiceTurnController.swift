@@ -27,10 +27,16 @@ final class VoiceTurnController {
 
     private weak var menuBarHost: MenuBarHost?
     private let apiKeyProvider: () throws -> String
+    private let voice: String
 
-    init(menuBarHost: MenuBarHost, apiKeyProvider: @escaping () throws -> String) {
+    init(
+        menuBarHost: MenuBarHost,
+        apiKeyProvider: @escaping () throws -> String,
+        voice: String = "alloy"
+    ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
+        self.voice = voice
         self.capture = VoiceProcessingIOAudioCapture()
         self.player = AudioOutputPlayer()
     }
@@ -82,6 +88,17 @@ final class VoiceTurnController {
 
         self.client = c
         menuBarHost?.setLastErrorMessage(nil)
+
+        // Configure the session for the bilingual v0 scope on every
+        // connect — the OpenAI Realtime session does not survive the
+        // socket so re-sending on reconnect keeps language hints +
+        // voice + system prompt aligned.
+        do {
+            try await c.send(SessionUpdate.bilingualV0(voice: voice))
+        } catch {
+            menuBarHost?.setLastErrorMessage("Could not configure session: \(error.localizedDescription)")
+        }
+
         startInboundDrain(on: c)
     }
 

@@ -1,0 +1,18 @@
+{
+  "name": "code-switch",
+  "description": "Bilingual code-switching Voice Turn. User says '这个 function should rate-limit 每个 IP, max 10次 per second'; server replies with mixed en/zh tokens. Outbound from the client stays the same as the pure-language fixtures.",
+  "inbound": [
+    "{\"type\":\"session.created\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_mix_001\",\"item_id\":\"item_mix_001\",\"delta\":\"FBUWFxg=\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_mix_001\",\"item_id\":\"item_mix_001\",\"delta\":\"GRobHB0=\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_mix_001\",\"item_id\":\"item_mix_001\",\"delta\":\"Hh8gISI=\"}",
+    "{\"type\":\"response.done\"}"
+  ],
+  "expected_outbound_types": [
+    "session.update",
+    "input_audio_buffer.append",
+    "input_audio_buffer.append",
+    "input_audio_buffer.commit",
+    "response.create"
+  ]
+}

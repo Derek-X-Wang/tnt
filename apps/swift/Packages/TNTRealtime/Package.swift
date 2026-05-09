@@ -11,7 +11,8 @@ let package = Package(
         .target(name: "TNTRealtime"),
         .testTarget(
             name: "TNTRealtimeTests",
-            dependencies: ["TNTRealtime"]
+            dependencies: ["TNTRealtime"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

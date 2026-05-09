@@ -1,0 +1,17 @@
+{
+  "name": "pure-zh",
+  "description": "Pure Mandarin Voice Turn. User asks '你好，能听到吗？', server replies in Mandarin. Outbound from the client must remain identical to pure-en — the client never reads response content, only forwards mic audio and commits.",
+  "inbound": [
+    "{\"type\":\"session.created\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_zh_001\",\"item_id\":\"item_zh_001\",\"delta\":\"CgsMDQ4=\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_zh_001\",\"item_id\":\"item_zh_001\",\"delta\":\"DxAREw==\"}",
+    "{\"type\":\"response.done\"}"
+  ],
+  "expected_outbound_types": [
+    "session.update",
+    "input_audio_buffer.append",
+    "input_audio_buffer.append",
+    "input_audio_buffer.commit",
+    "response.create"
+  ]
+}

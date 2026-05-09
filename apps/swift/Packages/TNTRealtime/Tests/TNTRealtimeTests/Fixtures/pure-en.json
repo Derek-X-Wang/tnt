@@ -1,0 +1,17 @@
+{
+  "name": "pure-en",
+  "description": "Pure English Voice Turn. User asks 'Can you hear me?', server replies in English. Outbound from the client is invariant to language — this fixture proves session.update + append+ + commit + create stay stable when the User speaks English.",
+  "inbound": [
+    "{\"type\":\"session.created\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_en_001\",\"item_id\":\"item_en_001\",\"delta\":\"AAECAwQ=\"}",
+    "{\"type\":\"response.audio.delta\",\"response_id\":\"resp_en_001\",\"item_id\":\"item_en_001\",\"delta\":\"BQYHCAk=\"}",
+    "{\"type\":\"response.done\"}"
+  ],
+  "expected_outbound_types": [
+    "session.update",
+    "input_audio_buffer.append",
+    "input_audio_buffer.append",
+    "input_audio_buffer.commit",
+    "response.create"
+  ]
+}

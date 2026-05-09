@@ -91,9 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.menuBarHost = menu
 
+        // Voice override per ~/.tnt/config (TNTConfig.voice) when present;
+        // otherwise the bilingual default `alloy`.
+        let configuredVoice = Self.loadVoiceOverride() ?? "alloy"
+
         let voiceController = VoiceTurnController(
             menuBarHost: menu,
-            apiKeyProvider: { try TNTCredentials.openAIKey() }
+            apiKeyProvider: { try TNTCredentials.openAIKey() },
+            voice: configuredVoice
         )
         self.voiceTurnController = voiceController
 
@@ -123,6 +128,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.byokHost = host
         host.present()
+    }
+
+    /// Read `~/.tnt/config` and return the optional Realtime `voice`
+    /// override. Returns `nil` when the file is absent or empty so the
+    /// caller can fall back to the bilingual default.
+    private static func loadVoiceOverride() -> String? {
+        let configPath = ("~/.tnt/config" as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: configPath)
+        guard let config = try? TNTConfig.load(from: url) else { return nil }
+        return config.voice
     }
 
     private func openInputMonitoringSettings() {
