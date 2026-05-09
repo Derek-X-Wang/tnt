@@ -15,15 +15,25 @@ public struct TNTConfig: Sendable, Equatable, Codable {
 
     public var realtimeModel: String?
     public var languageHints: [String]?
+    /// Realtime voice id. Defaults to `alloy` when omitted; M0/S9
+    /// makes this the only Realtime knob the User can override
+    /// without rebuilding.
+    public var voice: String?
 
-    public init(realtimeModel: String? = nil, languageHints: [String]? = nil) {
+    public init(
+        realtimeModel: String? = nil,
+        languageHints: [String]? = nil,
+        voice: String? = nil
+    ) {
         self.realtimeModel = realtimeModel
         self.languageHints = languageHints
+        self.voice = voice
     }
 
     private enum CodingKeys: String, CodingKey {
         case realtimeModel = "realtime_model"
         case languageHints = "language_hints"
+        case voice
     }
 
     /// Top-level fields that must never appear in `~/.tnt/config`. Any
