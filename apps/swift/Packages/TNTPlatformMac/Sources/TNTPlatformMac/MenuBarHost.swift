@@ -29,6 +29,11 @@ public final class MenuBarHost {
     /// Whether the menu currently surfaces a permission warning.
     public private(set) var permissionStatus: PermissionStatus
 
+    /// Most recent peak dB sample from the mic. Rendered as a small
+    /// suffix on the menu title item while the lamp is `.listening`,
+    /// so the User can see live VU motion without an extra window.
+    public private(set) var micLevelDB: Float?
+
     private let statusItem: NSStatusItem
     private let forwarder: MenuActionForwarder
 
@@ -72,6 +77,19 @@ public final class MenuBarHost {
         rebuild()
     }
 
+    /// Push a peak dB sample. Pass `nil` to clear (e.g. on `.idle`).
+    /// Updates only the menu title text — the icon doesn't redraw, so
+    /// the per-frame cadence stays cheap.
+    public func setMicLevel(_ dB: Float?) {
+        guard micLevelDB != dB else { return }
+        micLevelDB = dB
+        // Re-render the title item only, not the whole status-item
+        // appearance — the icon doesn't depend on level.
+        if let menu = statusItem.menu, let title = menu.items.first {
+            title.title = renderedMenuTitle()
+        }
+    }
+
     // MARK: - Wiring
 
     private func rebuild() {
@@ -90,10 +108,23 @@ public final class MenuBarHost {
         button.contentTintColor = state.tint.nsColor
     }
 
+    private func renderedMenuTitle() -> String {
+        guard state == .listening, let level = micLevelDB else {
+            return state.menuTitle
+        }
+        return "\(state.menuTitle) · \(Self.formatDB(level))"
+    }
+
+    private static func formatDB(_ value: Float) -> String {
+        // Clamp so the title doesn't grow with extreme outliers.
+        let clamped = max(-99, min(0, Int(value.rounded())))
+        return "\(clamped) dB"
+    }
+
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
 
-        let title = NSMenuItem(title: state.menuTitle, action: nil, keyEquivalent: "")
+        let title = NSMenuItem(title: renderedMenuTitle(), action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
 

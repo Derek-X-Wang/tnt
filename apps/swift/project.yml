@@ -53,6 +53,10 @@ targets:
         # docs/roadmap.md (M0) and the State Lamp design in
         # apps/swift/Packages/TNTPlatformMac/.../AppState.swift.
         INFOPLIST_KEY_LSUIElement: YES
+        # Required for the M0/S6 mic capture pipeline. Wording mirrors
+        # the consent body shown by `OnboardingView` so the system
+        # prompt and the in-app explanation stay in sync.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime."
         INFOPLIST_KEY_NSMainStoryboardFile: ""
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         MACOSX_DEPLOYMENT_TARGET: "14.0"
