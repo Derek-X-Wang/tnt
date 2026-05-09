@@ -1,7 +1,7 @@
 // OnboardingCoordinator — drives `OnboardingFlow` from SwiftUI button
-// presses + async TCC results, and persists `tnt.has_onboarded` once the
-// flow reaches its terminal step. ObservableObject so `OnboardingView`
-// re-renders on every step change.
+// presses + async TCC results, and persists `tnt.has_onboarded` once
+// the BYOK key has been saved to Keychain. ObservableObject so
+// `OnboardingView` re-renders on every step change.
 
 import AppKit
 import Combine
@@ -14,6 +14,10 @@ public final class OnboardingCoordinator: ObservableObject {
 
     public let body: ConsentBody
 
+    /// Exposed so `OnboardingView`'s embedded `BYOKView` can pass the
+    /// same tester implementation through to its own coordinator.
+    public let apiKeyTester: APIKeyTester
+
     private let requester: PermissionRequester
     private let defaults: UserDefaults
     private let onComplete: @MainActor () -> Void
@@ -21,11 +25,13 @@ public final class OnboardingCoordinator: ObservableObject {
     public init(
         body: ConsentBody = .default,
         requester: PermissionRequester = PermissionRequester(),
+        apiKeyTester: APIKeyTester = OpenAIAPIKeyTester(),
         defaults: UserDefaults = .standard,
         onComplete: @escaping @MainActor () -> Void
     ) {
         self.body = body
         self.requester = requester
+        self.apiKeyTester = apiKeyTester
         self.defaults = defaults
         self.flow = OnboardingFlow()
         self.onComplete = onComplete
@@ -56,6 +62,14 @@ public final class OnboardingCoordinator: ObservableObject {
         Self.openSettings(deepLink: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
     }
 
+    /// Called by `BYOKCoordinator` once the key has been written to
+    /// Keychain. Marks the User onboarded and signals completion.
+    public func apiKeySaved() {
+        flow.apiKeySaved()
+        OnboardingFlag.setOnboarded(true, in: defaults)
+        onComplete()
+    }
+
     // MARK: - Async TCC
 
     private func requestMicrophone() async {
@@ -69,10 +83,9 @@ public final class OnboardingCoordinator: ObservableObject {
     private func requestInputMonitoring() async {
         let granted = await requester.requestInputMonitoring()
         flow.inputMonitoringDecision(granted: granted)
-        if granted {
-            OnboardingFlag.setOnboarded(true, in: defaults)
-            onComplete()
-        }
+        // Onboarded state is set in `apiKeySaved()`, not here — the
+        // User must finish the BYOK step before onboarding counts as
+        // complete.
     }
 
     // MARK: - Helpers

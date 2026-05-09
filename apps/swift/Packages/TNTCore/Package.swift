@@ -9,5 +9,9 @@ let package = Package(
     ],
     targets: [
         .target(name: "TNTCore"),
+        .testTarget(
+            name: "TNTCoreTests",
+            dependencies: ["TNTCore"]
+        ),
     ]
 )

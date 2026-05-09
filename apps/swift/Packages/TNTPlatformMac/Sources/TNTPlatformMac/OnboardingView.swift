@@ -94,11 +94,16 @@ public struct OnboardingView: View {
                 onOpenSettings: coordinator.openInputMonitoringSettings,
                 onRetry: coordinator.retryInputMonitoring
             )
-        case .readyForApiKey:
+        case .connectingOpenAI:
+            BYOKView(coordinator: BYOKCoordinator(
+                tester: coordinator.apiKeyTester,
+                onSaved: { coordinator.apiKeySaved() }
+            ))
+        case .completed:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Next: add your OpenAI API key")
+                Text("All set — TNT is ready.")
                     .font(.headline)
-                Text("S5 will fill this in. The window closes momentarily.")
+                Text("This window closes automatically.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
