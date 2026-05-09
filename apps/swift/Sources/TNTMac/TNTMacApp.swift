@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var byokHost: BYOKHost?
     private var audioCapture: VoiceProcessingIOAudioCapture?
     private var captureDrainTask: Task<Void, Never>?
+    private var wsTestTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Force-load the placeholder modules so any compile-error or
@@ -88,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onReplaceAPIKey: { [weak self] in
                 self?.presentReplaceAPIKey()
+            },
+            onTestWSRoundtrip: { [weak self] in
+                self?.runWSRoundtripTest()
             }
         )
 
@@ -164,5 +168,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openInputMonitoringSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
         NSWorkspace.shared.open(url)
+    }
+
+    /// Hidden DEBUG-only roundtrip: connect to OpenAI Realtime, ask for
+    /// "Say hello in English.", play back the audio deltas. Used to
+    /// validate the WS path without wiring mic input (M0/S8).
+    private func runWSRoundtripTest() {
+        wsTestTask?.cancel()
+        wsTestTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runWSRoundtripTestImpl()
+        }
+    }
+
+    private func runWSRoundtripTestImpl() async {
+        menuBarHost?.setLastErrorMessage(nil)
+        let key: String
+        do {
+            key = try TNTCredentials.openAIKey()
+        } catch {
+            menuBarHost?.setState(.idle)
+            menuBarHost?.setLastErrorMessage("OpenAI API key missing — Replace API Key…")
+            NSLog("[TNT] WS test: missing API key — \(error)")
+            return
+        }
+
+        let player = AudioOutputPlayer()
+        do {
+            try player.start()
+        } catch {
+            NSLog("[TNT] WS test: could not start AudioOutputPlayer — \(error)")
+            return
+        }
+
+        let client = OpenAIRealtimeWSClient(apiKey: key)
+        do {
+            try await client.connect()
+        } catch {
+            NSLog("[TNT] WS test: connect failed — \(error)")
+            player.stop()
+            return
+        }
+
+        menuBarHost?.setState(.thinking)
+
+        // Ask for a spoken hello.
+        do {
+            try await client.send(ResponseCreate(response: .init(
+                modalities: ["audio", "text"],
+                instructions: "Say hello in English."
+            )))
+        } catch {
+            NSLog("[TNT] WS test: send failed — \(error)")
+            await client.disconnect()
+            player.stop()
+            menuBarHost?.setState(.idle)
+            return
+        }
+
+        for await event in client.inbound {
+            if Task.isCancelled { break }
+            switch event {
+            case .responseAudioDelta(let delta):
+                if menuBarHost?.state != .speaking {
+                    menuBarHost?.setState(.speaking)
+                }
+                player.enqueueBase64(delta.delta)
+            case .responseDone:
+                break
+            case .error(let err):
+                let summary = err.error.message ?? err.error.code ?? "Realtime error"
+                menuBarHost?.setLastErrorMessage("Realtime: \(summary)")
+                NSLog("[TNT] WS test: error event — code=\(err.error.code ?? "?") message=\(err.error.message ?? "?")")
+                break
+            case .sessionCreated, .unknown:
+                continue
+            }
+            if case .responseDone = event { break }
+            if case .error = event { break }
+        }
+
+        await client.disconnect()
+        // Give the player a beat to drain the queue before tearing down.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        player.stop()
+        menuBarHost?.setState(.idle)
     }
 }
