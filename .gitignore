@@ -48,3 +48,6 @@ notarization-creds.json
 *.pkg
 *.zip
 release-staging/
+
+# cmux-team worktree isolation
+.claude/worktrees/
