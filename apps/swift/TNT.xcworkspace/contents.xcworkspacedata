@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:TNT.xcodeproj">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTCore">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTRealtime">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTCognitive">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTMemory">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTIngest">
+   </FileRef>
+   <FileRef
+      location = "group:Packages/TNTPlatformMac">
+   </FileRef>
+</Workspace>

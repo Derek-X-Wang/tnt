@@ -1,0 +1,620 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0FB0CC1108B0038E7475F3B0 /* TNTPlatformMac in Frameworks */ = {isa = PBXBuildFile; productRef = 1596843DD9DFAAA1032F18B4 /* TNTPlatformMac */; };
+		12F265992F85A268F0408B57 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0F253A662E18A4435646AD /* main.swift */; };
+		2CDA7F97035A4D4181EF57FB /* TNTCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2A0F93FF17B4373686F0702D /* TNTCore */; };
+		3B298B53907158A80E0B458C /* TNTiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C716CF68DD7A8A1257D39E /* TNTiOSApp.swift */; };
+		8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 726D3A00C25680F5A209768C /* TNTMacApp.swift */; };
+		917EA7607DBCC9D75BC59A07 /* TNTCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2C7874C42ED02CAADAA3F8AD /* TNTCore */; };
+		98085C012479D8BF886ACA35 /* TNTIngest in Frameworks */ = {isa = PBXBuildFile; productRef = 3689BBF827C6BE92CEEF05B5 /* TNTIngest */; };
+		9D074D8985BC8FBFF1E395BE /* TNTRealtime in Frameworks */ = {isa = PBXBuildFile; productRef = 325FCA7A3650733EE55230FF /* TNTRealtime */; };
+		D1DCF28F6AC957CE568B6B95 /* TNTCognitive in Frameworks */ = {isa = PBXBuildFile; productRef = 25F2EBAB140B44EF1580C4E5 /* TNTCognitive */; };
+		D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */ = {isa = PBXBuildFile; productRef = 0D964440E8884A31BF6F8C31 /* TNTMemory */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		17C716CF68DD7A8A1257D39E /* TNTiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TNTiOSApp.swift; sourceTree = "<group>"; };
+		2AAF15947F7A86D1FCC73E8D /* TNTiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TNTiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		35552747E5FF0024465F0D5B /* TNTCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTCore; path = Packages/TNTCore; sourceTree = SOURCE_ROOT; };
+		568E2A9C19995F5A2C818AD5 /* TNTCognitive */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTCognitive; path = Packages/TNTCognitive; sourceTree = SOURCE_ROOT; };
+		67179AA7D49680428C1F081F /* TNTPlatformMac */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTPlatformMac; path = Packages/TNTPlatformMac; sourceTree = SOURCE_ROOT; };
+		726D3A00C25680F5A209768C /* TNTMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TNTMacApp.swift; sourceTree = "<group>"; };
+		921CC1BAD17D6C23808EB0F8 /* TNTCLI */ = {isa = PBXFileReference; includeInIndex = 0; path = TNTCLI; sourceTree = BUILT_PRODUCTS_DIR; };
+		9990F604F75ABAB2B9A19B1A /* TNTRealtime */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTRealtime; path = Packages/TNTRealtime; sourceTree = SOURCE_ROOT; };
+		B456EEA6DC9813631711900F /* TNTMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TNTMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B5A47DC14F6D6ED270602D4D /* TNTMemory */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTMemory; path = Packages/TNTMemory; sourceTree = SOURCE_ROOT; };
+		BE0F253A662E18A4435646AD /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		D263E959A4BD55F0C0864C50 /* TNTIngest */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTIngest; path = Packages/TNTIngest; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2EEE2D7B1913E0AE9822E56A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2CDA7F97035A4D4181EF57FB /* TNTCore in Frameworks */,
+				9D074D8985BC8FBFF1E395BE /* TNTRealtime in Frameworks */,
+				D1DCF28F6AC957CE568B6B95 /* TNTCognitive in Frameworks */,
+				D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */,
+				98085C012479D8BF886ACA35 /* TNTIngest in Frameworks */,
+				0FB0CC1108B0038E7475F3B0 /* TNTPlatformMac in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		30228C9A4E665B26B8BF69B9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				917EA7607DBCC9D75BC59A07 /* TNTCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		00CEB8F55A7CFEBAC789B1E6 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				AB454845573AFBA74294EF93 /* TNTCLI */,
+				9EFB479C758067D8DC29B031 /* TNTiOS */,
+				C5282A561B0FD7FD9CA325E8 /* TNTMac */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		921AFE5B0AB7735F8B479B1A /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				568E2A9C19995F5A2C818AD5 /* TNTCognitive */,
+				35552747E5FF0024465F0D5B /* TNTCore */,
+				D263E959A4BD55F0C0864C50 /* TNTIngest */,
+				B5A47DC14F6D6ED270602D4D /* TNTMemory */,
+				67179AA7D49680428C1F081F /* TNTPlatformMac */,
+				9990F604F75ABAB2B9A19B1A /* TNTRealtime */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		9EFB479C758067D8DC29B031 /* TNTiOS */ = {
+			isa = PBXGroup;
+			children = (
+				17C716CF68DD7A8A1257D39E /* TNTiOSApp.swift */,
+			);
+			path = TNTiOS;
+			sourceTree = "<group>";
+		};
+		A323D27A87337A04CF20C5A3 = {
+			isa = PBXGroup;
+			children = (
+				921AFE5B0AB7735F8B479B1A /* Packages */,
+				00CEB8F55A7CFEBAC789B1E6 /* Sources */,
+				BA518646D7E09D0823ED2291 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AB454845573AFBA74294EF93 /* TNTCLI */ = {
+			isa = PBXGroup;
+			children = (
+				BE0F253A662E18A4435646AD /* main.swift */,
+			);
+			path = TNTCLI;
+			sourceTree = "<group>";
+		};
+		BA518646D7E09D0823ED2291 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				921CC1BAD17D6C23808EB0F8 /* TNTCLI */,
+				2AAF15947F7A86D1FCC73E8D /* TNTiOS.app */,
+				B456EEA6DC9813631711900F /* TNTMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C5282A561B0FD7FD9CA325E8 /* TNTMac */ = {
+			isa = PBXGroup;
+			children = (
+				726D3A00C25680F5A209768C /* TNTMacApp.swift */,
+			);
+			path = TNTMac;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2B2427BED919BBFF05041D2C /* TNTMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD62480B27174977BFF3F0BA /* Build configuration list for PBXNativeTarget "TNTMac" */;
+			buildPhases = (
+				EF40E3723DB9DDF68E518DF4 /* Sources */,
+				2EEE2D7B1913E0AE9822E56A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TNTMac;
+			packageProductDependencies = (
+				2A0F93FF17B4373686F0702D /* TNTCore */,
+				325FCA7A3650733EE55230FF /* TNTRealtime */,
+				25F2EBAB140B44EF1580C4E5 /* TNTCognitive */,
+				0D964440E8884A31BF6F8C31 /* TNTMemory */,
+				3689BBF827C6BE92CEEF05B5 /* TNTIngest */,
+				1596843DD9DFAAA1032F18B4 /* TNTPlatformMac */,
+			);
+			productName = TNTMac;
+			productReference = B456EEA6DC9813631711900F /* TNTMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4CCECED8B11E03EF18AF5255 /* TNTCLI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6C06B5497D71E3D7E68841E8 /* Build configuration list for PBXNativeTarget "TNTCLI" */;
+			buildPhases = (
+				CB047EB5E2B8E3F78D3C8414 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TNTCLI;
+			packageProductDependencies = (
+			);
+			productName = TNTCLI;
+			productReference = 921CC1BAD17D6C23808EB0F8 /* TNTCLI */;
+			productType = "com.apple.product-type.tool";
+		};
+		5C578CB8D2790592F60ADD60 /* TNTiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 01F011249DDD070600CDD984 /* Build configuration list for PBXNativeTarget "TNTiOS" */;
+			buildPhases = (
+				E63DBED338255909D3FC7234 /* Sources */,
+				30228C9A4E665B26B8BF69B9 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TNTiOS;
+			packageProductDependencies = (
+				2C7874C42ED02CAADAA3F8AD /* TNTCore */,
+			);
+			productName = TNTiOS;
+			productReference = 2AAF15947F7A86D1FCC73E8D /* TNTiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2899C212BC0FD11E7A0BF679 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					2B2427BED919BBFF05041D2C = {
+						ProvisioningStyle = Automatic;
+					};
+					5C578CB8D2790592F60ADD60 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = E099492E57FF9DC0FF0E69F5 /* Build configuration list for PBXProject "TNT" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A323D27A87337A04CF20C5A3;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9876EA6DD04B994ED5389A4E /* XCLocalSwiftPackageReference "Packages/TNTCognitive" */,
+				A9C1857F94340DC4BDF8B57A /* XCLocalSwiftPackageReference "Packages/TNTCore" */,
+				224871A2B4568F70ED53F26A /* XCLocalSwiftPackageReference "Packages/TNTIngest" */,
+				DA67982E0B4D954B78A97624 /* XCLocalSwiftPackageReference "Packages/TNTMemory" */,
+				32FA90B1ED30AE5341BADD06 /* XCLocalSwiftPackageReference "Packages/TNTPlatformMac" */,
+				73A06462A329A4153A040F6E /* XCLocalSwiftPackageReference "Packages/TNTRealtime" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = BA518646D7E09D0823ED2291 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4CCECED8B11E03EF18AF5255 /* TNTCLI */,
+				2B2427BED919BBFF05041D2C /* TNTMac */,
+				5C578CB8D2790592F60ADD60 /* TNTiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		CB047EB5E2B8E3F78D3C8414 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				12F265992F85A268F0408B57 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E63DBED338255909D3FC7234 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3B298B53907158A80E0B458C /* TNTiOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF40E3723DB9DDF68E518DF4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		020CBBB1237C21A03ED838E5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.ios;
+				PRODUCT_NAME = TNT;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		15EC5FBD6B7482B9BCD5BAFB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = NO;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		2840B715B220D021F941DB3E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = NO;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		894F960EC37EE617C446D0D6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.app;
+				PRODUCT_NAME = TNT;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		A38D7C833F1C0159EC4E4177 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.ios;
+				PRODUCT_NAME = TNT;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A81033609FFB13D240ACD0E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.TNTCLI;
+				PRODUCT_NAME = tnt;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		AA341F491B306AA5532EEBFE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.TNTCLI;
+				PRODUCT_NAME = tnt;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		E01B3239645A240E3EED8524 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.app;
+				PRODUCT_NAME = TNT;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		01F011249DDD070600CDD984 /* Build configuration list for PBXNativeTarget "TNTiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A38D7C833F1C0159EC4E4177 /* Debug */,
+				020CBBB1237C21A03ED838E5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6C06B5497D71E3D7E68841E8 /* Build configuration list for PBXNativeTarget "TNTCLI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A81033609FFB13D240ACD0E2 /* Debug */,
+				AA341F491B306AA5532EEBFE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AD62480B27174977BFF3F0BA /* Build configuration list for PBXNativeTarget "TNTMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				894F960EC37EE617C446D0D6 /* Debug */,
+				E01B3239645A240E3EED8524 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E099492E57FF9DC0FF0E69F5 /* Build configuration list for PBXProject "TNT" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				15EC5FBD6B7482B9BCD5BAFB /* Debug */,
+				2840B715B220D021F941DB3E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		224871A2B4568F70ED53F26A /* XCLocalSwiftPackageReference "Packages/TNTIngest" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTIngest;
+		};
+		32FA90B1ED30AE5341BADD06 /* XCLocalSwiftPackageReference "Packages/TNTPlatformMac" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTPlatformMac;
+		};
+		73A06462A329A4153A040F6E /* XCLocalSwiftPackageReference "Packages/TNTRealtime" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTRealtime;
+		};
+		9876EA6DD04B994ED5389A4E /* XCLocalSwiftPackageReference "Packages/TNTCognitive" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTCognitive;
+		};
+		A9C1857F94340DC4BDF8B57A /* XCLocalSwiftPackageReference "Packages/TNTCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTCore;
+		};
+		DA67982E0B4D954B78A97624 /* XCLocalSwiftPackageReference "Packages/TNTMemory" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TNTMemory;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0D964440E8884A31BF6F8C31 /* TNTMemory */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTMemory;
+		};
+		1596843DD9DFAAA1032F18B4 /* TNTPlatformMac */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTPlatformMac;
+		};
+		25F2EBAB140B44EF1580C4E5 /* TNTCognitive */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTCognitive;
+		};
+		2A0F93FF17B4373686F0702D /* TNTCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTCore;
+		};
+		2C7874C42ED02CAADAA3F8AD /* TNTCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTCore;
+		};
+		325FCA7A3650733EE55230FF /* TNTRealtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTRealtime;
+		};
+		3689BBF827C6BE92CEEF05B5 /* TNTIngest */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TNTIngest;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 2899C212BC0FD11E7A0BF679 /* Project object */;
+}

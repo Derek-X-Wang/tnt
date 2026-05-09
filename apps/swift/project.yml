@@ -1,0 +1,120 @@
+# XcodeGen spec for the TNT workspace.
+#
+# Source of truth for the Xcode project shape. The generated `TNT.xcodeproj`
+# is committed alongside this file so CI runs a plain `xcodebuild` without
+# needing XcodeGen installed. After editing this file run:
+#
+#     (cd apps/swift && xcodegen generate)
+#
+# from the repo root and commit the resulting `TNT.xcodeproj` change.
+
+name: TNT
+options:
+  bundleIdPrefix: com.tnt
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+
+packages:
+  TNTCore:
+    path: Packages/TNTCore
+  TNTRealtime:
+    path: Packages/TNTRealtime
+  TNTCognitive:
+    path: Packages/TNTCognitive
+  TNTMemory:
+    path: Packages/TNTMemory
+  TNTIngest:
+    path: Packages/TNTIngest
+  TNTPlatformMac:
+    path: Packages/TNTPlatformMac
+
+targets:
+  TNTMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/TNTMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tnt.app
+        PRODUCT_NAME: TNT
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright 2026 Derek Wang and contributors."
+        INFOPLIST_KEY_LSUIElement: NO
+        INFOPLIST_KEY_NSMainStoryboardFile: ""
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
+    dependencies:
+      - package: TNTCore
+      - package: TNTRealtime
+      - package: TNTCognitive
+      - package: TNTMemory
+      - package: TNTIngest
+      - package: TNTPlatformMac
+
+  TNTiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/TNTiOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tnt.ios
+        PRODUCT_NAME: TNT
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
+    dependencies:
+      - package: TNTCore
+
+  TNTCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/TNTCLI
+    settings:
+      base:
+        PRODUCT_NAME: tnt
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGN_IDENTITY: ""
+
+schemes:
+  TNTMac:
+    build:
+      targets:
+        TNTMac: all
+    run:
+      config: Debug
+  TNTiOS:
+    build:
+      targets:
+        TNTiOS: all
+    run:
+      config: Debug
+  TNTCLI:
+    build:
+      targets:
+        TNTCLI: all
+    run:
+      config: Debug
