@@ -49,7 +49,10 @@ targets:
         PRODUCT_NAME: TNT
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright 2026 Derek Wang and contributors."
-        INFOPLIST_KEY_LSUIElement: NO
+        # Menu-bar-only app: no Dock icon, no app-switcher entry. See
+        # docs/roadmap.md (M0) and the State Lamp design in
+        # apps/swift/Packages/TNTPlatformMac/.../AppState.swift.
+        INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSMainStoryboardFile: ""
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
         MACOSX_DEPLOYMENT_TARGET: "14.0"
