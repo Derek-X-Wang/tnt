@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var byokHost: BYOKHost?
     private var voiceTurnController: VoiceTurnController?
     private var wsTestTask: Task<Void, Never>?
+    // Sparkle owns its own update-check timer once `startingUpdater: true`.
+    // Holding the wrapper keeps the controller alive for the app's
+    // lifetime; deallocating it would silently stop scheduled checks.
+    private let sparkle = SparkleMenuAction()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Force-load placeholder modules so missing-symbol regressions
@@ -87,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onTestWSRoundtrip: { [weak self] in
                 self?.runWSRoundtripTest()
+            },
+            onCheckForUpdates: { [weak self] in
+                self?.sparkle.checkForUpdates()
             }
         )
         self.menuBarHost = menu

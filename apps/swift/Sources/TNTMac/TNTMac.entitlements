@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        TNT is intentionally NOT App-Sandboxed. The product needs
+        Accessibility API reads (selected text, frontmost window
+        title, active app) and a global hotkey listener that
+        sandboxing forbids. See ADR-0001 (desktop-only v0) and
+        the Capture Set discussion in CONTEXT.md.
+
+        Hardened Runtime is on (ENABLE_HARDENED_RUNTIME=YES in
+        project.yml), so we declare the runtime exceptions TNT
+        actually needs and nothing more.
+    -->
+
+    <!-- Mic capture for Voice Turns (TNTRealtime / VoiceProcessingIO). -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Outbound WebSocket to OpenAI Realtime + Cognitive Engine HTTP. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Local Ingest server binds 127.0.0.1; loopback is reachable
+         without the network.server entitlement on macOS, so we
+         deliberately omit it. -->
+</dict>
+</plist>

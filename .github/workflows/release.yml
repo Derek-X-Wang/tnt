@@ -1,0 +1,356 @@
+name: Release
+
+# Tag-driven release pipeline. Pushing a `vX.Y.Z` tag triggers the build,
+# sign, notarize, and draft-Release sequence. Job 2 (publish-metadata.yml)
+# fires after the maintainer manually publishes the draft.
+#
+# Pattern mirrored from ContextFS/ctxfs/.github/workflows/release.yml.
+# TNT does not have a Rust workspace or a FSKit extension, so the
+# corresponding steps from ctxfs are intentionally absent here.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false  # never cancel in-progress signing — let it finish
+
+env:
+  SPARKLE_VERSION: '2.9.1'
+  # Pin Sparkle's tarball SHA so a compromised release.tar.xz fetch fails
+  # loudly instead of silently shipping tampered `sign_update`.
+  SPARKLE_TARBALL_SHA256: 'c0dde519fd2a43ddfc6a1eb76aec284d7d888fe281414f9177de3164d98ba4c7'
+  DEVELOPMENT_TEAM: RDQSC33B2X
+  DEVELOPER_ID_IDENTITY: 'Developer ID Application: Xinzhe Wang (RDQSC33B2X)'
+
+jobs:
+  build-and-sign:
+    name: Build, sign, notarize, draft Release
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      # ----- Checkout + toolchain ----------------------------------
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # release.sh used `git rev-list --count HEAD` for build number
+
+      - name: Show xcodebuild + SDK versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+
+      - name: Install create-dmg via Homebrew
+        run: |
+          brew install create-dmg
+          create-dmg --version
+
+      - name: Cache + install Sparkle CLI tools
+        id: sparkle-tools
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sparkle-tools
+          key: sparkle-${{ env.SPARKLE_VERSION }}
+
+      - name: Download Sparkle CLI tools (cache miss)
+        if: steps.sparkle-tools.outputs.cache-hit != 'true'
+        run: |
+          curl -fL -o /tmp/Sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          echo "${SPARKLE_TARBALL_SHA256}  /tmp/Sparkle.tar.xz" | shasum -a 256 --check
+          mkdir -p /tmp/sparkle-tools
+          tar -xJf /tmp/Sparkle.tar.xz -C /tmp/sparkle-tools
+
+      # ----- Version assertions ------------------------------------
+
+      - name: Read VERSION + assert match with tag
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          TAG="${GITHUB_REF_NAME}"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::VERSION says '$VERSION' but tag is '$TAG' (expected 'v$VERSION')"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+
+      - name: Assert release notes exist
+        run: |
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -s "$NOTES" ]; then
+            echo "::error::$NOTES is missing or empty"
+            exit 1
+          fi
+
+      # ----- Signing keychain --------------------------------------
+
+      - name: Import Developer ID cert into temp keychain
+        env:
+          DEVELOPER_ID_P12_BASE64:   ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          if [ -z "$DEVELOPER_ID_P12_BASE64" ] || [ -z "$DEVELOPER_ID_P12_PASSWORD" ]; then
+            echo "::error::DEVELOPER_ID_P12_BASE64 and DEVELOPER_ID_P12_PASSWORD secrets must be set. See docs/release.md."
+            exit 1
+          fi
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$DEVELOPER_ID_P12_BASE64" | base64 -D -o "$CERT_PATH"
+          security create-keychain  -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain  -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 7200 build.keychain
+          security import "$CERT_PATH" \
+            -k build.keychain \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f "$CERT_PATH"
+          security find-identity -p codesigning -v build.keychain
+
+      # ----- Xcode build + nested signing --------------------------
+
+      - name: Build TNT.app via xcodebuild (Developer ID)
+        run: |
+          set -o pipefail
+          # No log-truncation pipe: when xcodebuild fails the full log is
+          # what diagnoses 'BUILD FAILED', and a downstream codesign-verify
+          # error two steps later is much harder to root-cause without it.
+          xcodebuild \
+            -workspace apps/swift/TNT.xcworkspace \
+            -scheme TNTMac \
+            -configuration Release \
+            -derivedDataPath /tmp/tnt-build \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_IDENTITY="$DEVELOPER_ID_IDENTITY" \
+            OTHER_CODE_SIGN_FLAGS="--options runtime --timestamp"
+          echo "--- built product ---"
+          ls /tmp/tnt-build/Build/Products/Release/TNT.app/Contents/
+
+      - name: Re-sign nested Sparkle bundles with Developer ID (bottom-up)
+        run: |
+          # SPM-pulled Sparkle keeps maintainer signatures on its embedded
+          # XPC services + helpers. The notary rejects those because they
+          # don't match the team that signs the outer app. Re-sign each
+          # inner bundle from leaves up, then the framework, then the
+          # outer app. Signing a parent re-computes its content hash, so
+          # order matters.
+          APP=/tmp/tnt-build/Build/Products/Release/TNT.app
+          SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+
+          sign() {
+            codesign --force --sign "$DEVELOPER_ID_IDENTITY" \
+              --options runtime --timestamp "$@"
+          }
+
+          # 1. Sparkle XPC services (innermost binary first, then .xpc wrapper).
+          for xpc in Downloader Installer; do
+            if [ -d "$SPARKLE/XPCServices/$xpc.xpc" ]; then
+              sign "$SPARKLE/XPCServices/$xpc.xpc/Contents/MacOS/$xpc"
+              sign "$SPARKLE/XPCServices/$xpc.xpc"
+            fi
+          done
+
+          # 2. Sparkle helper executables.
+          [ -f "$SPARKLE/Autoupdate" ] && sign "$SPARKLE/Autoupdate"
+          if [ -d "$SPARKLE/Updater.app" ]; then
+            sign "$SPARKLE/Updater.app/Contents/MacOS/Updater"
+            sign "$SPARKLE/Updater.app"
+          fi
+
+          # 3. Sparkle framework itself.
+          sign "$APP/Contents/Frameworks/Sparkle.framework"
+
+          # 4. Bundled `tnt` CLI inside the .app (if present in v0+).
+          if [ -f "$APP/Contents/MacOS/tnt" ]; then
+            sign "$APP/Contents/MacOS/tnt"
+          fi
+
+          # 5. Outer app with TNTMac.entitlements re-applied.
+          codesign --force --sign "$DEVELOPER_ID_IDENTITY" \
+            --options runtime --timestamp \
+            --entitlements "$GITHUB_WORKSPACE/apps/swift/Sources/TNTMac/TNTMac.entitlements" \
+            "$APP"
+
+          codesign --verify --strict --verbose=4 "$APP"
+          codesign --display --verbose=2 "$APP" 2>&1 | head -20
+
+      # ----- DMG + sign --------------------------------------------
+
+      - name: Build + sign DMG
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP=/tmp/tnt-build/Build/Products/Release/TNT.app
+          mkdir -p /tmp/release-artifacts
+          create-dmg \
+            --volname "TNT ${VERSION}" \
+            --window-size 500 300 \
+            --icon "TNT.app" 125 150 \
+            --app-drop-link 375 150 \
+            "/tmp/release-artifacts/TNT-${VERSION}.dmg" \
+            "$APP"
+          DMG=/tmp/release-artifacts/TNT-${VERSION}.dmg
+          codesign --force --sign "$DEVELOPER_ID_IDENTITY" \
+            --options runtime --timestamp "$DMG"
+          ls -la /tmp/release-artifacts/
+
+      # ----- Notarize .app and DMG in parallel ---------------------
+
+      - name: Notarize + staple .app and DMG in parallel
+        env:
+          APPLE_ID:          ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID:     ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_ID_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::APPLE_ID / APPLE_ID_PASSWORD / APPLE_TEAM_ID secrets must be set. See docs/release.md."
+            exit 1
+          fi
+          VERSION="${{ steps.version.outputs.version }}"
+          APP=/tmp/tnt-build/Build/Products/Release/TNT.app
+          DMG=/tmp/release-artifacts/TNT-${VERSION}.dmg
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP" /tmp/_notary_app.zip
+
+          # Fire both submissions without --wait so they queue concurrently at Apple.
+          APP_ID=$(xcrun notarytool submit /tmp/_notary_app.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --output-format json | tee /tmp/_notary_app_submit.json | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+          DMG_ID=$(xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --output-format json | tee /tmp/_notary_dmg_submit.json | \
+            python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+          echo "submitted app=$APP_ID dmg=$DMG_ID"
+
+          xcrun notarytool wait "$APP_ID" --timeout 30m \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" || true &
+          APP_WAIT=$!
+          xcrun notarytool wait "$DMG_ID" --timeout 30m \
+            --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" || true &
+          DMG_WAIT=$!
+          wait "$APP_WAIT"; wait "$DMG_WAIT"
+
+          check_status() {
+            local id="$1" label="$2"
+            local status
+            status=$(xcrun notarytool info "$id" \
+              --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+              --output-format json | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+            echo "--- $label status: $status ---"
+            if [ "$status" != "Accepted" ]; then
+              echo "::error::Notarization rejected $label — fetching detailed log"
+              xcrun notarytool log "$id" \
+                --apple-id "$APPLE_ID" --password "$APPLE_ID_PASSWORD" --team-id "$APPLE_TEAM_ID"
+              return 1
+            fi
+          }
+          check_status "$APP_ID" "app"
+          check_status "$DMG_ID" "dmg"
+
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          xcrun stapler staple "$DMG"
+          rm -f /tmp/_notary_app.zip
+
+      # ----- Sparkle update archive --------------------------------
+
+      - name: Create Sparkle update zip
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP=/tmp/tnt-build/Build/Products/Release/TNT.app
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "/tmp/release-artifacts/TNT-${VERSION}.zip"
+
+      - name: Sign Sparkle zip (EdDSA)
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -o pipefail
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY secret must be set. Generate with `sign_update --generate-keys`; see docs/release.md."
+            exit 1
+          fi
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP="/tmp/release-artifacts/TNT-${VERSION}.zip"
+
+          # Canonical pattern from `sign_update --help`:
+          #     echo "$PRIVATE_KEY_SECRET" | sign_update --ed-key-file - <file>
+          # Piping via stdin avoids the temp-file keychain fallthrough that
+          # produces 'Signing key not found' even when --ed-key-file is
+          # pointed at a valid file. `-p` asks for just the signature
+          # string (no `sparkle:edSignature=...` prefix).
+          SIG=$(printf '%s' "$SPARKLE_PRIVATE_KEY" | \
+            /tmp/sparkle-tools/bin/sign_update --ed-key-file - -p "$ZIP")
+          if [ -z "$SIG" ]; then
+            echo "::error::sign_update produced no signature — check SPARKLE_PRIVATE_KEY"
+            exit 1
+          fi
+          printf '%s' "$SIG" > "/tmp/release-artifacts/TNT-${VERSION}.zip.sig"
+
+          # Verify round-trip with the keychain-less flag form.
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | \
+            /tmp/sparkle-tools/bin/sign_update --ed-key-file - --verify "$ZIP" "$SIG"
+
+      # ----- Checksums + pre-release validation --------------------
+
+      - name: Generate checksums.txt
+        run: |
+          cd /tmp/release-artifacts
+          shasum -a 256 ./*.dmg ./*.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Pre-release validation
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP=/tmp/tnt-build/Build/Products/Release/TNT.app
+          DMG=/tmp/release-artifacts/TNT-${VERSION}.dmg
+
+          echo "--- spctl accepts .app ---"
+          spctl -a -vv "$APP"
+          echo "--- spctl accepts DMG ---"
+          spctl -a -vv --type install "$DMG"
+          echo "--- codesign --verify clean ---"
+          codesign --verify --strict --verbose=4 "$APP"
+
+      # ----- Draft Release -----------------------------------------
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          NOTES=".github/release-notes/${TAG}.md"
+          cd /tmp/release-artifacts
+          # --repo required because cwd is outside the git checkout;
+          # `gh release create` tries `git remote` to infer it otherwise.
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "$TAG" \
+            --notes-file "${GITHUB_WORKSPACE}/${NOTES}" \
+            "TNT-${VERSION}.dmg" \
+            "TNT-${VERSION}.zip" \
+            "TNT-${VERSION}.zip.sig" \
+            "checksums.txt"
+          echo "Draft release created: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # ----- Cleanup (always) --------------------------------------
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain || true

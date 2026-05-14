@@ -10,7 +10,7 @@
 
 name: TNT
 options:
-  bundleIdPrefix: com.tnt
+  bundleIdPrefix: com.derekxwang.tnt
   deploymentTarget:
     macOS: "14.0"
     iOS: "17.0"
@@ -22,6 +22,25 @@ settings:
     SWIFT_VERSION: "5.10"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    # User-facing semver and monotonic build number. `scripts/release.sh`
+    # stamps the generated `project.pbxproj` directly on each release tag
+    # (matches the ctxfs pattern, avoids a hard XcodeGen dependency at
+    # release time). The values here are the pre-release defaults the
+    # generated project ships with.
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    # Apple Developer team for all targets. Local development uses
+    # CODE_SIGN_STYLE=Automatic (set per-target below); CI's release
+    # workflow forces Manual signing with the Developer ID identity via
+    # `xcodebuild` overrides — see `.github/workflows/release.yml`.
+    DEVELOPMENT_TEAM: RDQSC33B2X
+    # Hardened Runtime is required for notarization. Both Debug and
+    # Release configurations enable it so signed local builds behave the
+    # same way notarized releases do. CI's `ci.yml` passes
+    # `CODE_SIGNING_ALLOWED=NO` at build time which makes this a no-op
+    # for unsigned CI builds.
+    ENABLE_HARDENED_RUNTIME: YES
+    OTHER_CODE_SIGN_FLAGS: "--timestamp"
 
 packages:
   TNTCore:
@@ -36,6 +55,14 @@ packages:
     path: Packages/TNTIngest
   TNTPlatformMac:
     path: Packages/TNTPlatformMac
+  # Sparkle: in-app auto-update. Pinned to the 2.9.x range so the
+  # Sparkle CLI tools (`sign_update`) downloaded by the release workflow
+  # match the framework version resolved here. Bumping the major
+  # requires reviewing the public-EdDSA-key compatibility note in
+  # docs/release.md.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.0"
 
 targets:
   TNTMac:
@@ -45,7 +72,7 @@ targets:
       - path: Sources/TNTMac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tnt.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.derekxwang.tnt.companion
         PRODUCT_NAME: TNT
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright 2026 Derek Wang and contributors."
@@ -59,11 +86,20 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime."
         INFOPLIST_KEY_NSMainStoryboardFile: ""
         INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        # Sparkle configuration. SUPublicEDKey is intentionally blank in
+        # the repo — the EdDSA key pair is generated locally per-install
+        # by the maintainer (see docs/release.md) and the public key
+        # goes here on the first release that ships Sparkle. The release
+        # workflow signs update archives with the matching private key
+        # held as the `SPARKLE_PRIVATE_KEY` GitHub Actions secret.
+        INFOPLIST_KEY_SUFeedURL: https://derek-x-wang.github.io/tnt/appcast.xml
+        INFOPLIST_KEY_SUPublicEDKey: ""
+        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
+        INFOPLIST_KEY_SUScheduledCheckInterval: "86400"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_ENTITLEMENTS: Sources/TNTMac/TNTMac.entitlements
     dependencies:
       - package: TNTCore
       - package: TNTRealtime
@@ -71,6 +107,8 @@ targets:
       - package: TNTMemory
       - package: TNTIngest
       - package: TNTPlatformMac
+      - package: Sparkle
+        product: Sparkle
 
   TNTiOS:
     type: application
@@ -79,7 +117,7 @@ targets:
       - path: Sources/TNTiOS
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tnt.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.derekxwang.tnt.mobile
         PRODUCT_NAME: TNT
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -87,9 +125,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGN_IDENTITY: ""
     dependencies:
       - package: TNTCore
 
@@ -100,11 +135,10 @@ targets:
       - path: Sources/TNTCLI
     settings:
       base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.derekxwang.tnt.cli
         PRODUCT_NAME: tnt
         MACOSX_DEPLOYMENT_TARGET: "14.0"
-        CODE_SIGNING_REQUIRED: NO
-        CODE_SIGNING_ALLOWED: NO
-        CODE_SIGN_IDENTITY: ""
+        CODE_SIGN_STYLE: Automatic
 
 schemes:
   TNTMac:

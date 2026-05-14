@@ -11,10 +11,12 @@
 		12F265992F85A268F0408B57 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE0F253A662E18A4435646AD /* main.swift */; };
 		2CDA7F97035A4D4181EF57FB /* TNTCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2A0F93FF17B4373686F0702D /* TNTCore */; };
 		3B298B53907158A80E0B458C /* TNTiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C716CF68DD7A8A1257D39E /* TNTiOSApp.swift */; };
+		4A2FE001B7C6B285824A8C68 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = F3A3830AF82F00BFB6B7C18B /* Sparkle */; };
 		8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 726D3A00C25680F5A209768C /* TNTMacApp.swift */; };
 		917EA7607DBCC9D75BC59A07 /* TNTCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2C7874C42ED02CAADAA3F8AD /* TNTCore */; };
 		98085C012479D8BF886ACA35 /* TNTIngest in Frameworks */ = {isa = PBXBuildFile; productRef = 3689BBF827C6BE92CEEF05B5 /* TNTIngest */; };
 		9D074D8985BC8FBFF1E395BE /* TNTRealtime in Frameworks */ = {isa = PBXBuildFile; productRef = 325FCA7A3650733EE55230FF /* TNTRealtime */; };
+		BBEC07E04431B47841B12C47 /* SparkleMenuAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C9F7D283B3AAA63D274347 /* SparkleMenuAction.swift */; };
 		D1DCF28F6AC957CE568B6B95 /* TNTCognitive in Frameworks */ = {isa = PBXBuildFile; productRef = 25F2EBAB140B44EF1580C4E5 /* TNTCognitive */; };
 		D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */ = {isa = PBXBuildFile; productRef = 0D964440E8884A31BF6F8C31 /* TNTMemory */; };
 		DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */; };
@@ -28,8 +30,10 @@
 		660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTurnController.swift; sourceTree = "<group>"; };
 		67179AA7D49680428C1F081F /* TNTPlatformMac */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTPlatformMac; path = Packages/TNTPlatformMac; sourceTree = SOURCE_ROOT; };
 		726D3A00C25680F5A209768C /* TNTMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TNTMacApp.swift; sourceTree = "<group>"; };
+		91C9F7D283B3AAA63D274347 /* SparkleMenuAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkleMenuAction.swift; sourceTree = "<group>"; };
 		921CC1BAD17D6C23808EB0F8 /* TNTCLI */ = {isa = PBXFileReference; includeInIndex = 0; path = TNTCLI; sourceTree = BUILT_PRODUCTS_DIR; };
 		9990F604F75ABAB2B9A19B1A /* TNTRealtime */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTRealtime; path = Packages/TNTRealtime; sourceTree = SOURCE_ROOT; };
+		A2A223649CAA4049EA5C77B9 /* TNTMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TNTMac.entitlements; sourceTree = "<group>"; };
 		B456EEA6DC9813631711900F /* TNTMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TNTMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B5A47DC14F6D6ED270602D4D /* TNTMemory */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTMemory; path = Packages/TNTMemory; sourceTree = SOURCE_ROOT; };
 		BE0F253A662E18A4435646AD /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -47,6 +51,7 @@
 				D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */,
 				98085C012479D8BF886ACA35 /* TNTIngest in Frameworks */,
 				0FB0CC1108B0038E7475F3B0 /* TNTPlatformMac in Frameworks */,
+				4A2FE001B7C6B285824A8C68 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -122,6 +127,8 @@
 		C5282A561B0FD7FD9CA325E8 /* TNTMac */ = {
 			isa = PBXGroup;
 			children = (
+				91C9F7D283B3AAA63D274347 /* SparkleMenuAction.swift */,
+				A2A223649CAA4049EA5C77B9 /* TNTMac.entitlements */,
 				726D3A00C25680F5A209768C /* TNTMacApp.swift */,
 				660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */,
 			);
@@ -150,6 +157,7 @@
 				0D964440E8884A31BF6F8C31 /* TNTMemory */,
 				3689BBF827C6BE92CEEF05B5 /* TNTIngest */,
 				1596843DD9DFAAA1032F18B4 /* TNTPlatformMac */,
+				F3A3830AF82F00BFB6B7C18B /* Sparkle */,
 			);
 			productName = TNTMac;
 			productReference = B456EEA6DC9813631711900F /* TNTMac.app */;
@@ -201,9 +209,15 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					2B2427BED919BBFF05041D2C = {
+						DevelopmentTeam = RDQSC33B2X;
+						ProvisioningStyle = Automatic;
+					};
+					4CCECED8B11E03EF18AF5255 = {
+						DevelopmentTeam = RDQSC33B2X;
 						ProvisioningStyle = Automatic;
 					};
 					5C578CB8D2790592F60ADD60 = {
+						DevelopmentTeam = RDQSC33B2X;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -218,6 +232,7 @@
 			mainGroup = A323D27A87337A04CF20C5A3;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				DFD6BEEF5A6A41E4F0014CBB /* XCRemoteSwiftPackageReference "Sparkle" */,
 				9876EA6DD04B994ED5389A4E /* XCLocalSwiftPackageReference "Packages/TNTCognitive" */,
 				A9C1857F94340DC4BDF8B57A /* XCLocalSwiftPackageReference "Packages/TNTCore" */,
 				224871A2B4568F70ED53F26A /* XCLocalSwiftPackageReference "Packages/TNTIngest" */,
@@ -258,6 +273,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BBEC07E04431B47841B12C47 /* SparkleMenuAction.swift in Sources */,
 				8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */,
 				DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */,
 			);
@@ -270,9 +286,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -282,7 +296,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.mobile;
 				PRODUCT_NAME = TNT;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -323,7 +337,10 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = RDQSC33B2X;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -343,9 +360,11 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.0.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -388,7 +407,10 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = RDQSC33B2X;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -402,8 +424,10 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.0.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -416,23 +440,26 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_ENTITLEMENTS = Sources/TNTMac/TNTMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "https://derek-x-wang.github.io/tnt/appcast.xml";
+				INFOPLIST_KEY_SUPublicEDKey = "";
+				INFOPLIST_KEY_SUScheduledCheckInterval = 86400;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.companion;
 				PRODUCT_NAME = TNT;
 				SDKROOT = macosx;
 			};
@@ -442,9 +469,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -454,7 +479,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.mobile;
 				PRODUCT_NAME = TNT;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -464,16 +489,14 @@
 		A81033609FFB13D240ACD0E2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.TNTCLI;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.cli;
 				PRODUCT_NAME = tnt;
 				SDKROOT = macosx;
 			};
@@ -482,16 +505,14 @@
 		AA341F491B306AA5532EEBFE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.TNTCLI;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.cli;
 				PRODUCT_NAME = tnt;
 				SDKROOT = macosx;
 			};
@@ -501,23 +522,26 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
-				CODE_SIGNING_REQUIRED = NO;
-				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_ENTITLEMENTS = Sources/TNTMac/TNTMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Derek Wang and contributors.";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "TNT needs microphone access so the Personal Master Agent can hear your Voice Turns and route them to OpenAI Realtime.";
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "https://derek-x-wang.github.io/tnt/appcast.xml";
+				INFOPLIST_KEY_SUPublicEDKey = "";
+				INFOPLIST_KEY_SUScheduledCheckInterval = 86400;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tnt.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.derekxwang.tnt.companion;
 				PRODUCT_NAME = TNT;
 				SDKROOT = macosx;
 			};
@@ -591,6 +615,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		DFD6BEEF5A6A41E4F0014CBB /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		0D964440E8884A31BF6F8C31 /* TNTMemory */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -619,6 +654,11 @@
 		3689BBF827C6BE92CEEF05B5 /* TNTIngest */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TNTIngest;
+		};
+		F3A3830AF82F00BFB6B7C18B /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = DFD6BEEF5A6A41E4F0014CBB /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
