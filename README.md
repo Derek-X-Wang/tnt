@@ -6,6 +6,19 @@ Voice-first **Personal Master Agent** for macOS. Sits between a single human use
 
 v0 in active development. See [`docs/roadmap.md`](./docs/roadmap.md) for milestones and acceptance demos.
 
+## Install
+
+Once the first signed alpha ships, the recommended path is Homebrew:
+
+```sh
+brew tap Derek-X-Wang/tnt
+brew install --cask tnt
+```
+
+Or download the signed `.dmg` from the [latest GitHub Release](https://github.com/Derek-X-Wang/tnt/releases) and drag `TNT.app` into Applications.
+
+TNT auto-updates in place via [Sparkle](https://sparkle-project.org): the menu-bar menu's **Check for Updates…** item triggers an immediate check, and a background check fires once per day. The update feed lives at `https://derek-x-wang.github.io/tnt/appcast.xml`; release archives are EdDSA-signed and verified before being applied. See [`docs/release.md`](./docs/release.md) for the release operator's runbook.
+
 ## Domain language
 
 Read [`CONTEXT.md`](./CONTEXT.md) before contributing — it defines the canonical vocabulary (Personal Master Agent, Worker Agent, Voice Turn, Capture Set, Capture Chip, Session Event, Cognitive Engine, Memory Store, Future Server Boundary). Don't drift to synonyms the glossary marks `_Avoid_:`.

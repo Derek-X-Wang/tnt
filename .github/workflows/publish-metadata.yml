@@ -1,0 +1,165 @@
+name: Publish metadata
+
+# Triggered when the maintainer manually promotes the draft Release created
+# by release.yml. Also supports manual re-run via workflow_dispatch for
+# recovery when something downstream needs a second attempt.
+#
+# v0 scope: regenerate the Sparkle appcast on gh-pages so installed copies
+# of TNT see the new version. Homebrew tap publishing lands in a follow-up
+# PR that closes issue #10 (S12).
+#
+# Pattern mirrored from ContextFS/ctxfs/.github/workflows/publish-metadata.yml.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to reconcile (e.g. v0.0.1)"
+        required: true
+
+permissions:
+  contents: write   # push to gh-pages
+
+jobs:
+  publish-metadata:
+    name: Regenerate appcast
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main (for helper scripts)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download release artifacts (zip + sig)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/release-assets
+          cd /tmp/release-assets
+          # Skip *.dmg — we only need the .zip + .sig + checksums for the
+          # appcast. The Homebrew step that needs the .dmg SHA lives in
+          # the follow-up tap-bump PR (#10).
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.sig' \
+            --pattern 'TNT-*.zip' \
+            --pattern 'checksums.txt'
+          ls -la
+
+      - name: Parse artifact metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          ASSETS=/tmp/release-assets
+
+          # Sparkle EdDSA signature + zip length.
+          SIG=$(tr -d '[:space:]' < "${ASSETS}/TNT-${VERSION}.zip.sig")
+          ZIP_LEN=$(stat -c%s "${ASSETS}/TNT-${VERSION}.zip" 2>/dev/null || \
+                    stat -f%z "${ASSETS}/TNT-${VERSION}.zip")
+
+          # CFBundleVersion (build number) from the outer .app's Info.plist.
+          # Sparkle's SUStandardVersionComparator compares <sparkle:version>
+          # against the installed CFBundleVersion — passing the marketing
+          # string (e.g. '0.0.1') against build 12 is parsed as [0,0,1]
+          # vs [12,0,0] and Sparkle then misreports the update direction.
+          # ctxfs hit this as the v0.1.1 incident; TNT inherits the fix.
+          BUILD_NUMBER=$(python3 - <<EOF
+          import plistlib, sys, zipfile
+          target = 'TNT.app/Contents/Info.plist'
+          with zipfile.ZipFile("${ASSETS}/TNT-${VERSION}.zip") as z:
+              candidates = [n for n in z.namelist()
+                            if n.endswith(target) and 'Frameworks/' not in n]
+              if not candidates:
+                  sys.exit('outer TNT.app Info.plist not found in release zip')
+              with z.open(candidates[0]) as f:
+                  print(plistlib.load(f)['CFBundleVersion'])
+          EOF
+          )
+          if [ -z "$BUILD_NUMBER" ]; then
+            echo "::error::failed to extract CFBundleVersion from release zip"
+            exit 1
+          fi
+          echo "Extracted CFBundleVersion=${BUILD_NUMBER} for sparkle:version"
+
+          # Render release body Markdown -> HTML for the appcast.
+          # Sparkle's update dialog renders <description> in a WebView, so
+          # raw markdown shows up to users as literal '#', '**', '`'
+          # characters. `markdown` is pure-Python (~1s install); pandoc is
+          # NOT preinstalled on ubuntu-latest.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > /tmp/release-body.md
+          pip3 install --quiet markdown
+          python3 -m markdown -x fenced_code -x tables /tmp/release-body.md > /tmp/release-body.html
+
+          {
+            echo "ed_sig=$SIG"
+            echo "zip_len=$ZIP_LEN"
+            echo "build_number=$BUILD_NUMBER"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Regenerate appcast.xml
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          ZIP_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}/TNT-${VERSION}.zip"
+          # If appcast.xml doesn't exist on gh-pages yet, seed it.
+          if [ ! -s gh-pages/appcast.xml ]; then
+            cat > gh-pages/appcast.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>TNT update feed</title>
+              <link>https://derek-x-wang.github.io/tnt/appcast.xml</link>
+              <description>Sparkle update feed for Derek-X-Wang/tnt</description>
+              <language>en</language>
+            </channel>
+          </rss>
+          EOF
+          fi
+          python3 scripts/append-appcast-item.py \
+            --appcast gh-pages/appcast.xml \
+            --version "${{ steps.meta.outputs.build_number }}" \
+            --short-version "$VERSION" \
+            --enclosure-url "$ZIP_URL" \
+            --ed-signature "${{ steps.meta.outputs.ed_sig }}" \
+            --length "${{ steps.meta.outputs.zip_len }}" \
+            --description-file /tmp/release-body.html
+          # Validate via stdlib — xmllint isn't on ubuntu-latest by default.
+          python3 -c "import xml.etree.ElementTree as ET; ET.parse('gh-pages/appcast.xml')"
+
+      - name: Commit + push gh-pages
+        run: |
+          cd gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          if git diff --staged --quiet; then
+            echo "appcast.xml unchanged (tag may have been re-published)"
+          else
+            git commit -m "chore(appcast): add ${{ steps.tag.outputs.tag }}"
+            git push origin gh-pages
+          fi

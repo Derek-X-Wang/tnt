@@ -48,7 +48,8 @@ public final class MenuBarHost {
         onOpenInputMonitoringSettings: MenuAction? = nil,
         onRetryInputMonitoring: MenuAction? = nil,
         onReplaceAPIKey: MenuAction? = nil,
-        onTestWSRoundtrip: MenuAction? = nil
+        onTestWSRoundtrip: MenuAction? = nil,
+        onCheckForUpdates: MenuAction? = nil
     ) {
         self.state = initialState
         self.permissionStatus = permissionStatus
@@ -58,6 +59,7 @@ public final class MenuBarHost {
             retry: onRetryInputMonitoring,
             replaceAPIKey: onReplaceAPIKey,
             testWSRoundtrip: onTestWSRoundtrip,
+            checkForUpdates: onCheckForUpdates,
             setState: nil
         )
         // Wire the debug-only state flipper after init so the closure can
@@ -166,6 +168,7 @@ public final class MenuBarHost {
         menu.addItem(NSMenuItem.separator())
 
         forwarder.attachReplaceAPIKeyItem(into: menu)
+        forwarder.attachCheckForUpdatesItem(into: menu)
 
         let quit = NSMenuItem(
             title: "Quit TNT",
@@ -195,6 +198,7 @@ private final class MenuActionForwarder: NSObject {
     private let retryAction: MenuBarHost.MenuAction?
     private let replaceAPIKeyAction: MenuBarHost.MenuAction?
     private let testWSRoundtripAction: MenuBarHost.MenuAction?
+    private let checkForUpdatesAction: MenuBarHost.MenuAction?
     var setStateAction: ((AppState) -> Void)?
 
     init(
@@ -202,12 +206,14 @@ private final class MenuActionForwarder: NSObject {
         retry: MenuBarHost.MenuAction?,
         replaceAPIKey: MenuBarHost.MenuAction?,
         testWSRoundtrip: MenuBarHost.MenuAction?,
+        checkForUpdates: MenuBarHost.MenuAction?,
         setState: ((AppState) -> Void)?
     ) {
         self.openSettingsAction = openSettings
         self.retryAction = retry
         self.replaceAPIKeyAction = replaceAPIKey
         self.testWSRoundtripAction = testWSRoundtrip
+        self.checkForUpdatesAction = checkForUpdates
         self.setStateAction = setState
     }
 
@@ -224,6 +230,21 @@ private final class MenuActionForwarder: NSObject {
 
     @objc func replaceAPIKey(_ sender: NSMenuItem) {
         replaceAPIKeyAction?()
+    }
+
+    func attachCheckForUpdatesItem(into menu: NSMenu) {
+        guard checkForUpdatesAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func checkForUpdates(_ sender: NSMenuItem) {
+        checkForUpdatesAction?()
     }
 
 #if DEBUG
