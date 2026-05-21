@@ -5,8 +5,13 @@ name: Publish metadata
 # recovery when something downstream needs a second attempt.
 #
 # v0 scope: regenerate the Sparkle appcast on gh-pages so installed copies
-# of TNT see the new version. Homebrew tap publishing lands in a follow-up
-# PR that closes issue #10 (S12).
+# of TNT see the new version, then bump the Homebrew tap so `brew upgrade`
+# users pick up the new dmg.
+#
+# Job order matters: `publish-metadata` (appcast) runs first; `tap-bump`
+# depends on it. A tap outage therefore never blocks Sparkle updates —
+# the worst case is that brew users lag by one release until the
+# tracking issue opened by `tap-bump` is resolved.
 #
 # Pattern mirrored from ContextFS/ctxfs/.github/workflows/publish-metadata.yml.
 
@@ -163,3 +168,186 @@ jobs:
             git commit -m "chore(appcast): add ${{ steps.tag.outputs.tag }}"
             git push origin gh-pages
           fi
+
+  tap-bump:
+    name: Bump Homebrew tap
+    # Serialize after the appcast publish so Sparkle users always have
+    # the new version even if the tap-bump step trips. Implementation
+    # of issue #10 (M0/S12: Homebrew Cask formula).
+    needs: publish-metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main (for helper scripts)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: tnt
+
+      - name: Bump Cask formula on tap
+        id: bump
+        # Don't fail the workflow if the tap repo or the PAT misbehaves —
+        # the appcast already shipped. The follow-up step opens a
+        # tracking issue so the maintainer notices and can recover by
+        # re-running this workflow via workflow_dispatch.
+        continue-on-error: true
+        env:
+          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HOMEBREW_TAP_PAT" ]; then
+            echo "::error::HOMEBREW_TAP_PAT secret must be set. See docs/release.md (#one-time-setup)."
+            exit 1
+          fi
+
+          VERSION="${{ steps.tag.outputs.version }}"
+          TAG="${{ steps.tag.outputs.tag }}"
+          BUMP_BRANCH="bump-${TAG}"
+          REPO_OWNER="${GITHUB_REPOSITORY%%/*}"
+
+          # 1. Download the signed dmg from the release so we can compute
+          #    its SHA-256 — Homebrew verifies the cask's `sha256` field
+          #    against the actual file at install time.
+          mkdir -p /tmp/tap-assets
+          GH_TOKEN="${{ github.token }}" gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "TNT-${VERSION}.dmg" \
+            --dir /tmp/tap-assets
+          DMG_SHA=$(shasum -a 256 "/tmp/tap-assets/TNT-${VERSION}.dmg" | awk '{print $1}')
+          echo "computed dmg sha256: $DMG_SHA"
+
+          # 2. Clone the tap with PAT so we can push. Fine-scoped PAT
+          #    covers only Derek-X-Wang/homebrew-tnt (Contents+PRs RW).
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_PAT}@github.com/${REPO_OWNER}/homebrew-tnt.git" \
+            tap
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # -B recreates the branch fresh on workflow_dispatch replays
+          # so the diff is always against the current main, never a
+          # stale earlier attempt.
+          git checkout -B "$BUMP_BRANCH"
+          cd ..
+
+          # 3. Render Casks/tnt.rb + Formula/tnt.rb from release metadata.
+          python3 tnt/scripts/render-homebrew.py \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --repo-slug "$GITHUB_REPOSITORY" \
+            --dmg-sha "$DMG_SHA" \
+            --cask-out tap/Casks/tnt.rb \
+            --formula-out tap/Formula/tnt.rb
+
+          # 4. Commit + push the bump branch. The branch is owned by
+          #    this workflow alone (no human writes to bump-*), so a
+          #    -f push on replay is safe and re-bases on the current
+          #    tap main without conflicts.
+          cd tap
+          git add Casks/tnt.rb Formula/tnt.rb
+          if git diff --staged --quiet; then
+            echo "tap already pinned to ${TAG} — nothing to commit"
+            exit 0
+          fi
+          # Multiple -m flags avoid embedding heredocs inside this YAML
+          # block scalar — heredoc indentation has to match the |-block
+          # indent and pollutes commit-message + PR-body whitespace.
+          git commit \
+            -m "bump tnt to ${TAG}" \
+            -m "Auto-generated by Derek-X-Wang/tnt's publish-metadata workflow." \
+            -m "Source release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            -m "Cask SHA-256: ${DMG_SHA}"
+          git push -f origin "$BUMP_BRANCH"
+
+          # 5. Open PR on the tap repo (idempotent — skip if one is
+          #    already open against the bump-<tag> branch).
+          EXISTING=$(gh pr list \
+            --repo "${REPO_OWNER}/homebrew-tnt" \
+            --head "$BUMP_BRANCH" \
+            --json number --jq 'length')
+          if [ "$EXISTING" != "0" ]; then
+            echo "PR for ${BUMP_BRANCH} already open on ${REPO_OWNER}/homebrew-tnt"
+            exit 0
+          fi
+          PR_BODY=/tmp/tap-pr-body.md
+          {
+            echo "Auto-generated by Derek-X-Wang/tnt's release pipeline."
+            echo
+            echo "- Tag: \`${TAG}\` (TNT ${VERSION})"
+            echo "- Cask SHA-256: \`${DMG_SHA}\`"
+            echo "- Source release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            echo
+            echo "## Validation"
+            echo
+            echo "\`brew style --cask Casks/tnt.rb\` and \`brew audit --cask --strict Casks/tnt.rb\`"
+            echo "should run locally before merging — neither is wired into this PR's CI because"
+            echo "the rendered formula only exists on this branch after the workflow fires"
+            echo "(see Derek-X-Wang/tnt#10)."
+          } > "$PR_BODY"
+          gh pr create \
+            --repo "${REPO_OWNER}/homebrew-tnt" \
+            --base main \
+            --head "$BUMP_BRANCH" \
+            --title "bump tnt to ${TAG}" \
+            --body-file "$PR_BODY"
+
+      - name: Open tracking issue on tap-bump failure
+        # If the bump step continued-on-error, surface it as an issue on
+        # the main tnt repo so the maintainer notices. Uses the default
+        # github.token because HOMEBREW_TAP_PAT is fine-scoped to the
+        # tap repo and cannot create issues on Derek-X-Wang/tnt.
+        if: steps.bump.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          ISSUE_BODY=/tmp/tap-bump-failure.md
+          {
+            echo "The \`tap-bump\` step in \`.github/workflows/publish-metadata.yml\` failed for"
+            echo "release \`${TAG}\`. Sparkle auto-updates are unaffected — installed copies"
+            echo "will still pick up this version via the appcast."
+            echo
+            echo "- Workflow run: ${RUN_URL}"
+            echo "- Tag: \`${TAG}\`"
+            echo
+            echo "## Recovery"
+            echo
+            echo "1. Confirm \`HOMEBREW_TAP_PAT\` is still valid (Settings → Secrets and"
+            echo "   variables → Actions). See \`docs/release.md\` (One-time setup →"
+            echo "   Homebrew tap PAT)."
+            echo "2. Re-run the workflow:"
+            echo
+            echo "       gh workflow run publish-metadata.yml -f tag=${TAG}"
+            echo
+            echo "3. If the workflow still fails, render the Cask locally and push manually."
+            echo "   Download \`TNT-${VERSION}.dmg\` from the release, then:"
+            echo
+            echo "       DMG_SHA=\$(shasum -a 256 TNT-${VERSION}.dmg | awk '{print \$1}')"
+            echo "       python3 scripts/render-homebrew.py \\\\"
+            echo "         --version ${VERSION} --tag ${TAG} \\\\"
+            echo "         --repo-slug ${GITHUB_REPOSITORY} \\\\"
+            echo "         --dmg-sha \"\$DMG_SHA\" \\\\"
+            echo "         --cask-out /tmp/Casks/tnt.rb \\\\"
+            echo "         --formula-out /tmp/Formula/tnt.rb"
+          } > "$ISSUE_BODY"
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Homebrew tap-bump failed for ${TAG}" \
+            --label needs-triage \
+            --body-file "$ISSUE_BODY"

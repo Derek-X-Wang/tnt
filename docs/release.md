@@ -83,9 +83,38 @@ git checkout main
 
 In repo Settings → Pages, set source to `gh-pages` / `/ (root)`. The first time `publish-metadata.yml` runs, it seeds `appcast.xml` if missing.
 
-### 5. (Optional, not v0) Homebrew tap repo
+### 5. Homebrew tap PAT
 
-`scripts/render-homebrew.py` produces a Cask formula referencing the signed `.dmg`, but TNT v0 does **not** wire the tap-bump step in CI — that work lives in issue #10. When ready, create `Derek-X-Wang/homebrew-tnt`, mirror `ctxfs`'s `Casks/` + `Formula/` layout, and add a `HOMEBREW_TAP_PAT` secret to publish-metadata.yml.
+The `tap-bump` job in `publish-metadata.yml` opens a PR on `Derek-X-Wang/homebrew-tnt` bumping `Casks/tnt.rb` to the new release. The default `GITHUB_TOKEN` only writes to the repo the workflow runs in, so a separate fine-scoped Personal Access Token is required.
+
+The tap repo (`Derek-X-Wang/homebrew-tnt`) already exists, public, with `Casks/` + `Formula/` + README scaffolded — there is nothing to create.
+
+**Mint the PAT** (do this once, then rotate when the expiry warning fires):
+
+1. <https://github.com/settings/personal-access-tokens/new> → **Fine-grained tokens** → **Generate new token**.
+2. **Token name**: `tnt-tap-bump` (or similar).
+3. **Expiration**: 1 year (calendar a reminder; rotation is the only thing that can stop the pipeline silently).
+4. **Resource owner**: `Derek-X-Wang`.
+5. **Repository access** → **Only select repositories** → pick **`Derek-X-Wang/homebrew-tnt`** (and nothing else — least privilege).
+6. **Repository permissions**:
+   - **Contents**: Read and write (commit + push the `bump-<tag>` branch).
+   - **Pull requests**: Read and write (open the bump PR via `gh pr create`).
+   - Leave everything else at "No access."
+7. Generate → copy the `github_pat_…` string (shown only once).
+
+Add it as a GitHub Actions secret on the **tnt** repo (not the tap repo):
+
+| Secret | Value |
+| --- | --- |
+| `HOMEBREW_TAP_PAT` | the `github_pat_…` string from the step above |
+
+The workflow uses this PAT to both push the bump branch and to call `gh pr create --repo Derek-X-Wang/homebrew-tnt`. The follow-up "open tracking issue on tap-bump failure" step uses the default `github.token` because that issue lives back on `Derek-X-Wang/tnt`, which the fine-scoped PAT cannot reach by design.
+
+If this secret is missing or expired, the appcast still publishes (jobs are serialized — appcast first) but the tap-bump step fails loudly and files a tracking issue on this repo so you notice.
+
+### 6. (Out of scope, not v0) standalone CLI tarball
+
+`scripts/render-homebrew.py` also emits a placeholder `Formula/tnt.rb` because the bundled `tnt` CLI ships inside the .app (via the cask's `binary "#{appdir}/TNT.app/Contents/MacOS/tnt"` line) v0. When TNT starts shipping a separate CLI tarball post-v0, the placeholder formula becomes a real one and the cask's `binary` line is removed.
 
 ## Cutting a release
 
