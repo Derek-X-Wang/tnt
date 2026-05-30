@@ -60,7 +60,7 @@ _Avoid_: log line, notification
 v0 first-class language pair = English (en) + Mandarin Simplified (zh-Hans), with **code-switching inside a single Voice Turn** as a supported case ("这个 function should rate-limit 每个 IP"). Realtime is configured with both hints; Rewrite system prompts are bilingual-aware and default to English output for Worker Agents unless the user signals otherwise. Other languages still work but are not on the v0 test surface.
 
 **Voice Turn**:
-One round of human speech → TNT spoken reply. Spans the realtime session lifecycle. v0 starts/ends a Voice Turn via a single configurable hotkey (default ⌥Space): _hold_ = push-to-talk, _tap_ = toggle until next tap. Wake-word activation is post-v0.
+One round of human speech → TNT spoken reply. Spans the realtime session lifecycle. v0 starts/ends a Voice Turn via a single configurable hotkey (default ⌃⌥Space — ⌥Space collides with Raycast): _hold_ = push-to-talk, _tap_ = toggle until next tap. Wake-word activation is post-v0.
 _Avoid_: utterance, message
 
 **Rewrite**:

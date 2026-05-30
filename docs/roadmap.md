@@ -9,7 +9,7 @@ Each milestone is independently shippable through the Sparkle auto-update channe
 ## M0 — Voice round-trip works
 
 **Acceptance demo**
-Hold `⌥Space`, say "Hi, can you hear me?" or "你好，能听到吗？". Hear a Realtime spoken reply within ~600ms of release. Tap-toggle alternates open/closed mic. Menu bar reflects mic state.
+Hold `⌃⌥Space`, say "Hi, can you hear me?" or "你好，能听到吗？". Hear a Realtime spoken reply within ~600ms of release. Tap-toggle alternates open/closed mic. Menu bar reflects mic state.
 
 **Ships**
 - Signed + notarized `.dmg` via GitHub Releases (mirroring `ContextFS/ctxfs` pipeline).
@@ -18,7 +18,7 @@ Hold `⌥Space`, say "Hi, can you hear me?" or "你好，能听到吗？". Hear 
 - First-run privacy consent screen + Microphone + Input Monitoring TCC prompts.
 - BYOK config reader at `~/.tnt/config` (OpenAI key, optional Realtime model override).
 - `RealtimeWSClient` in `TNTRealtime` (URLSessionWebSocketTask, AVAudioEngine PCM16 24 kHz, VoiceProcessingIO echo cancellation, `response.cancel` interrupt).
-- Hotkey listener in `TNTPlatformMac` (default `⌥Space`, configurable via UserDefaults).
+- Hotkey listener in `TNTPlatformMac` (default `⌃⌥Space`, configurable via UserDefaults).
 - Bilingual hint config: `language: ["en", "zh"]` on Realtime session.
 
 **Out of scope**
