@@ -1,7 +1,7 @@
 // HotkeyChord — the chord the global hotkey listener reacts to. The
 // string form (`"option+space"`) is the persisted contract for the
-// `defaults write com.tnt.app hotkey …` override path; round-tripping
-// must be lossless.
+// `defaults write com.derekxwang.tnt.companion hotkey …` override path;
+// round-tripping must be lossless.
 //
 // v0 only models the chord shape needed for ⌥Space. The `Key` enum is
 // a closed set so unknown keys parse as `nil` rather than silently
@@ -51,8 +51,13 @@ public struct HotkeyChord: Sendable, Equatable {
         self.key = key
     }
 
-    /// Default chord for v0: `⌥Space` (option+space).
-    public static let `default`: HotkeyChord = HotkeyChord(modifiers: [.option], key: .space)
+    /// Default chord for v0: `⌃⌥Space` (control+option+space).
+    ///
+    /// Deliberately three-key: the obvious two-key chords are all taken on
+    /// a typical Mac — `⌘Space` is Spotlight, `⌥Space` is Raycast's default,
+    /// `⌃Space` is the input-source switch. `⌃⌥Space` rarely collides.
+    /// Override with `defaults write com.derekxwang.tnt.companion hotkey "…"`.
+    public static let `default`: HotkeyChord = HotkeyChord(modifiers: [.control, .option], key: .space)
 
     /// Parse a string of the form `"option+space"`, `"control+space"`,
     /// `"option+command+space"`. Whitespace is trimmed and the string is
@@ -84,10 +89,40 @@ public struct HotkeyChord: Sendable, Equatable {
         return (modList + [key.rawValue]).joined(separator: "+")
     }
 
+    // MARK: - Event matching
+
+    /// Whether a `keyDown` event *opens* this chord. Requires the
+    /// configured key plus exactly the configured modifier set — a bare
+    /// key (no modifiers) must never start a Voice Turn.
+    ///
+    /// Pure + `CGEventFlags`-only so the match policy is unit-testable
+    /// without a `CGEventTap` (`HotkeyHost` is otherwise smoke-only).
+    public func matchesKeyDown(flags: CGEventFlags, keyCode: UInt16) -> Bool {
+        guard keyCode == key.cgKeyCode else { return false }
+
+        // Mask out caps-lock / numeric / help bits so a user with caps-
+        // lock toggled isn't blocked from triggering the chord.
+        let trackedMask: CGEventFlags = [.maskCommand, .maskAlternate, .maskShift, .maskControl]
+        let active = flags.intersection(trackedMask)
+        let expected = modifiers.reduce(into: CGEventFlags()) { $0.insert($1.cgFlag) }
+        return active == expected
+    }
+
+    /// Whether a `keyUp` event *closes* this chord. Matches on the key
+    /// alone — by the time the key's `keyUp` arrives the user has often
+    /// already released the modifier, so requiring the modifier here would
+    /// drop the release event and strand an open gesture (the M0
+    /// modifier-release-ordering bug). Safe because the recognizer's
+    /// `keyUp` is a no-op unless a matching `keyDown` opened the gesture.
+    public func matchesKeyUp(keyCode: UInt16) -> Bool {
+        keyCode == key.cgKeyCode
+    }
+
     // MARK: - UserDefaults
 
     /// UserDefaults key the install reads on launch. Mirrors the value
-    /// in the M0/S3 acceptance example: `defaults write com.tnt.app hotkey …`.
+    /// in the M0/S3 acceptance example:
+    /// `defaults write com.derekxwang.tnt.companion hotkey …`.
     public static let userDefaultsKey: String = "hotkey"
 
     /// Load the configured chord from `UserDefaults`, falling back to

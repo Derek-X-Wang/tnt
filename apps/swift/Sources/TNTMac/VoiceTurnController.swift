@@ -1,12 +1,15 @@
 // VoiceTurnController — glue layer that runs one **Voice Turn** by
-// coordinating `AudioCapture`, `OpenAIRealtimeWSClient`,
-// `AudioOutputPlayer`, and `MenuBarHost` against a pure
-// `VoiceTurnFlow` state machine. Lives in the app target so it can
-// import every package the v0 voice path touches.
+// coordinating `RealtimeAudioSession`, `OpenAIRealtimeWSClient`, and
+// `MenuBarHost` against a pure `VoiceTurnFlow` state machine. Lives in
+// the app target so it can import every package the v0 voice path
+// touches.
 //
 // The state-transition logic itself is in `TNTPlatformMac.VoiceTurnFlow`
 // and unit-tested there; this class is the thinnest possible bridge
 // between the flow's directives and the actual hardware / network.
+//
+// Audio is a single `RealtimeAudioSession` (one AVAudioEngine, capture +
+// playback) — see that file for why two engines fail on real hardware.
 
 import AppKit
 import Foundation
@@ -18,11 +21,10 @@ import TNTRealtime
 final class VoiceTurnController {
 
     private var flow = VoiceTurnFlow()
-    private let capture: VoiceProcessingIOAudioCapture
-    private let player: AudioOutputPlayer
+    private let audio: RealtimeAudioSession
     private var client: OpenAIRealtimeWSClient?
 
-    private var captureTask: Task<Void, Never>?
+    private var captureDrainTask: Task<Void, Never>?
     private var inboundTask: Task<Void, Never>?
 
     private weak var menuBarHost: MenuBarHost?
@@ -37,8 +39,7 @@ final class VoiceTurnController {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
         self.voice = voice
-        self.capture = VoiceProcessingIOAudioCapture()
-        self.player = AudioOutputPlayer()
+        self.audio = RealtimeAudioSession()
     }
 
     // MARK: - Hotkey edges
@@ -54,10 +55,11 @@ final class VoiceTurnController {
     }
 
     func tearDown() async {
-        captureTask?.cancel()
+        captureDrainTask?.cancel()
         inboundTask?.cancel()
-        await capture.stop()
-        player.stop()
+        captureDrainTask = nil
+        inboundTask = nil
+        audio.stop()
         if let client {
             await client.disconnect()
         }
@@ -80,8 +82,8 @@ final class VoiceTurnController {
         let c = OpenAIRealtimeWSClient(apiKey: apiKey)
         do {
             try await c.connect()
-            try player.start()
         } catch {
+            // Nothing to leak — `connect()` failed, so no live socket.
             menuBarHost?.setLastErrorMessage("Could not connect: \(error.localizedDescription)")
             return
         }
@@ -91,7 +93,7 @@ final class VoiceTurnController {
 
         // Configure the session for the bilingual v0 scope on every
         // connect — the OpenAI Realtime session does not survive the
-        // socket so re-sending on reconnect keeps language hints +
+        // socket, so re-sending on reconnect keeps language hints +
         // voice + system prompt aligned.
         do {
             try await c.send(SessionUpdate.bilingualV0(voice: voice))
@@ -100,6 +102,7 @@ final class VoiceTurnController {
         }
 
         startInboundDrain(on: c)
+        startCaptureDrain()
     }
 
     private func startInboundDrain(on client: OpenAIRealtimeWSClient) {
@@ -107,9 +110,29 @@ final class VoiceTurnController {
         inboundTask = Task { [weak self] in
             for await event in stream {
                 if Task.isCancelled { break }
-                await MainActor.run {
-                    self?.handle(serverEvent: event)
-                }
+                self?.handle(serverEvent: event)
+            }
+        }
+    }
+
+    /// One long-lived loop that forwards mic frames to the WS for the
+    /// whole connection. Frames are only physically produced while the
+    /// `RealtimeAudioSession` tap is installed (between `.startCapture`
+    /// and `.stopCapture`), so this naturally idles between Voice Turns.
+    ///
+    /// This replaces the old per-listening-window `for await capture.frames`
+    /// loop, which re-iterated a single-consumer `AsyncStream` each turn —
+    /// fine on turn 1, silently empty on turn 2.
+    private func startCaptureDrain() {
+        guard captureDrainTask == nil else { return }
+        captureDrainTask = Task { [weak self] in
+            guard let self else { return }
+            for await frame in self.audio.frames {
+                if Task.isCancelled { break }
+                let dB = AudioLevel.peakDB(from: frame)
+                let base64 = frame.base64EncodedString()
+                try? await self.client?.send(InputAudioBufferAppend(audio: base64))
+                self.menuBarHost?.setMicLevel(dB)
             }
         }
     }
@@ -141,19 +164,23 @@ final class VoiceTurnController {
                     menuBarHost?.setMicLevel(nil)
                 }
             case .startCapture:
-                startCaptureForwarding()
+                do {
+                    try audio.startCapture()
+                } catch {
+                    menuBarHost?.setLastErrorMessage("Mic start failed: \(error.localizedDescription)")
+                }
             case .stopCapture:
-                stopCaptureForwarding()
+                audio.stopCapture()
             case .sendCommitAndCreate:
                 sendCommitAndCreate()
             case .sendCancelAndClear:
                 sendCancelAndClear()
             case .enqueuePlayback(let payload):
-                player.enqueueBase64(payload)
+                audio.enqueueBase64(payload)
             case .stopPlayer:
-                player.stop()
+                audio.flushPlayback()
             case .restartPlayer:
-                try? player.start()
+                audio.resumePlayback()
             case .showError(let message):
                 menuBarHost?.setLastErrorMessage(message)
             }
@@ -175,39 +202,6 @@ final class VoiceTurnController {
         Task {
             try? await client?.send(ResponseCancel())
             try? await client?.send(InputAudioBufferClear())
-        }
-    }
-
-    private func startCaptureForwarding() {
-        captureTask?.cancel()
-        captureTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.capture.start()
-            } catch {
-                await MainActor.run {
-                    self.menuBarHost?.setLastErrorMessage("Mic start failed: \(error.localizedDescription)")
-                }
-                return
-            }
-            for await frame in self.capture.frames {
-                if Task.isCancelled { break }
-                let dB = AudioLevel.peakDB(from: frame)
-                let base64 = frame.base64EncodedString()
-                let client = await MainActor.run { self.client }
-                try? await client?.send(InputAudioBufferAppend(audio: base64))
-                await MainActor.run {
-                    self.menuBarHost?.setMicLevel(dB)
-                }
-            }
-        }
-    }
-
-    private func stopCaptureForwarding() {
-        captureTask?.cancel()
-        captureTask = nil
-        Task { [capture] in
-            await capture.stop()
         }
     }
 }

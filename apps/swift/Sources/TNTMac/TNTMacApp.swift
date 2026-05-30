@@ -174,18 +174,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let player = AudioOutputPlayer()
-        do {
-            try player.start()
-        } catch {
-            return
-        }
+        // Playback-only use of the shared audio session — the engine
+        // starts lazily on the first `enqueueBase64`. No separate output
+        // engine (that two-engine design threw -10877 on real hardware).
+        let audio = RealtimeAudioSession()
 
         let client = OpenAIRealtimeWSClient(apiKey: key)
         do {
             try await client.connect()
         } catch {
-            player.stop()
+            audio.stop()
             return
         }
 
@@ -202,7 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if menuBarHost?.state != .speaking {
                     menuBarHost?.setState(.speaking)
                 }
-                player.enqueueBase64(delta.delta)
+                audio.enqueueBase64(delta.delta)
             case .responseDone:
                 break
             case .error(let err):
@@ -218,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         await client.disconnect()
         try? await Task.sleep(nanoseconds: 300_000_000)
-        player.stop()
+        audio.stop()
         menuBarHost?.setState(.idle)
     }
 }

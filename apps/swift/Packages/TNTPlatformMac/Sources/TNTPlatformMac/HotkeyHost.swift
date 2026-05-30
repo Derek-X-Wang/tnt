@@ -135,12 +135,17 @@ public final class HotkeyHost {
     // MARK: - Event handling (called on MainActor)
 
     fileprivate func handleEvent(type: CGEventType, timestamp: TimeInterval, flags: CGEventFlags, keyCode: UInt16) {
-        guard matches(flags: flags, keyCode: keyCode) else { return }
+        // Match policy lives on `HotkeyChord` (pure + unit-tested): a
+        // keyDown needs the full chord to *open* a gesture; a keyUp needs
+        // only the key to *close* one, because the modifier is often
+        // already released by the time the key's keyUp lands.
         let effect: HotkeyGestureRecognizer.Effect
         switch type {
         case .keyDown:
+            guard chord.matchesKeyDown(flags: flags, keyCode: keyCode) else { return }
             effect = recognizer.keyDown(at: timestamp)
         case .keyUp:
+            guard chord.matchesKeyUp(keyCode: keyCode) else { return }
             effect = recognizer.keyUp(at: timestamp)
         default:
             return
@@ -150,20 +155,6 @@ public final class HotkeyHost {
         case .stopListening:  listener(.stopListening)
         case .noChange:       break
         }
-    }
-
-    private func matches(flags: CGEventFlags, keyCode: UInt16) -> Bool {
-        guard keyCode == chord.key.cgKeyCode else { return false }
-
-        // Mask out caps-lock / numeric / help bits so a user with caps-
-        // lock toggled isn't blocked from triggering the chord.
-        let trackedMask: CGEventFlags = [.maskCommand, .maskAlternate, .maskShift, .maskControl]
-        let active = flags.intersection(trackedMask)
-
-        let expected = chord.modifiers.reduce(into: CGEventFlags()) { acc, mod in
-            acc.insert(mod.cgFlag)
-        }
-        return active == expected
     }
 
     private func updateAuthorization(_ new: Authorization) {
