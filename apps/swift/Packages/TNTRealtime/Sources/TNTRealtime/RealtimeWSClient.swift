@@ -1,7 +1,8 @@
-// RealtimeWSClient — typed WebSocket client for the OpenAI Realtime
-// API. Owns the upgrade headers (Bearer auth, `OpenAI-Beta: realtime=v1`,
-// the ZDR request header per ADR-0004), runs the inbound receive loop,
-// and forwards typed `RealtimeServerEvent`s through `inbound`.
+// RealtimeWSClient — typed WebSocket client for the OpenAI Realtime GA
+// API (`/v1/realtime`). Owns the upgrade request (Bearer auth only — the
+// GA surface takes no `OpenAI-Beta` header; see `makeRequest`), runs the
+// inbound receive loop, and forwards typed `RealtimeServerEvent`s through
+// `inbound`.
 //
 // Reconnect: a single transport-level failure during `receive()` is
 // recovered by reconnecting once and resuming the loop. A second
@@ -87,15 +88,19 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
         components.queryItems = [URLQueryItem(name: "model", value: model)]
         var request = URLRequest(url: components.url ?? endpoint)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
-        // ZDR header per ADR-0004. The header is a no-op for orgs that
-        // don't have ZDR; sending it on every call avoids drift between
-        // ZDR-eligible and non-eligible installs.
-        request.setValue("true", forHTTPHeaderField: OpenAIRealtimeWSClient.zdrHeader)
+        // GA Realtime API (`/v1/realtime`) takes ONLY the Bearer header.
+        // The `OpenAI-Beta: realtime=v1` header that the beta API required
+        // now routes the request to the removed beta surface and the server
+        // closes the socket with "The Realtime Beta API is no longer
+        // supported." So it is deliberately absent.
+        //
+        // ZDR: the beta `OpenAI-Realtime-Zero-Data-Retention` request header
+        // is not part of the GA surface. Zero-Data-Retention is configured
+        // at the org/project level for GA, so per-connection header opt-in
+        // (ADR-0004) is a follow-up once the GA mechanism is wired; sending
+        // the dead beta header bought nothing and is dropped.
         return request
     }
-
-    public static let zdrHeader = "OpenAI-Realtime-Zero-Data-Retention"
 
     // MARK: - Receive loop
 

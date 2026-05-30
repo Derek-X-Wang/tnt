@@ -64,23 +64,31 @@ public final class HotkeyHost {
     /// the first time the user holds the chord; reports the resulting
     /// authorization through `Event.permissionChanged`.
     public func start() {
-        guard eventTap == nil else { return }
+        guard eventTap == nil else {
+            TNTLog.hotkey.info("start: tap already installed, no-op")
+            return
+        }
 
         // `CGRequestListenEventAccess()` triggers the system prompt the
         // first time it's called for a given app, then short-circuits to
         // a cached answer. Calling it before `tapCreate` keeps the prompt
         // attached to the user's first press rather than the OS's idle
         // background detection.
+        let preflight = CGPreflightListenEventAccess()
         let granted = CGRequestListenEventAccess()
+        TNTLog.hotkey.info("start: chord=\(self.chord.displayString, privacy: .public) preflight=\(preflight) requestAccess=\(granted)")
         guard granted else {
+            TNTLog.hotkey.error("start: Input Monitoring NOT granted — tap not installed. Grant in System Settings › Privacy & Security › Input Monitoring, then relaunch or Retry.")
             updateAuthorization(.denied)
             return
         }
 
         guard installEventTap() else {
+            TNTLog.hotkey.error("start: CGEvent.tapCreate returned nil — tap install failed despite access granted")
             updateAuthorization(.denied)
             return
         }
+        TNTLog.hotkey.info("start: event tap installed + enabled, authorization granted")
         updateAuthorization(.granted)
     }
 
@@ -139,16 +147,30 @@ public final class HotkeyHost {
         // keyDown needs the full chord to *open* a gesture; a keyUp needs
         // only the key to *close* one, because the modifier is often
         // already released by the time the key's keyUp lands.
+        // Compute the match decision once. Only the chord's own key is
+        // ever logged — never arbitrary keystrokes (this is a system-wide
+        // tap; logging every key would be keylogging).
+        let isChordKey = keyCode == chord.key.cgKeyCode
+        let matchDown = chord.matchesKeyDown(flags: flags, keyCode: keyCode)
+        let matchUp = chord.matchesKeyUp(keyCode: keyCode)
+        if isChordKey {
+            let kind = type == .keyDown ? "keyDown" : "keyUp"
+            TNTLog.hotkey.info("event \(kind, privacy: .public) keyCode=\(keyCode, privacy: .public) flags=\(flags.rawValue, privacy: .public) matchDown=\(matchDown, privacy: .public) matchUp=\(matchUp, privacy: .public)")
+        }
+
         let effect: HotkeyGestureRecognizer.Effect
         switch type {
         case .keyDown:
-            guard chord.matchesKeyDown(flags: flags, keyCode: keyCode) else { return }
+            guard matchDown else { return }
             effect = recognizer.keyDown(at: timestamp)
         case .keyUp:
-            guard chord.matchesKeyUp(keyCode: keyCode) else { return }
+            guard matchUp else { return }
             effect = recognizer.keyUp(at: timestamp)
         default:
             return
+        }
+        if isChordKey {
+            TNTLog.hotkey.info("effect=\(String(describing: effect), privacy: .public)")
         }
         switch effect {
         case .startListening: listener(.startListening)

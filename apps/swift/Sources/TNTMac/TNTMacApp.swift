@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = TNTMemoryModule.self
         _ = TNTIngestModule.self
 
-        if OnboardingFlag.hasOnboarded() {
+        let onboarded = OnboardingFlag.hasOnboarded()
+        TNTLog.app.info("didFinishLaunching: hasOnboarded=\(onboarded) — \(onboarded ? "installing runtime" : "showing onboarding")")
+        if onboarded {
             installRuntime()
         } else {
             presentOnboarding()
@@ -76,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installRuntime() {
         let chord = HotkeyChord.load()
+        TNTLog.app.info("installRuntime: menu-bar lamp + hotkey listener, chord=\(chord.displayString, privacy: .public)")
 
         let menu = MenuBarHost(
             initialState: .idle,
@@ -189,7 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarHost?.setState(.thinking)
         try? await client.send(ResponseCreate(response: .init(
-            modalities: ["audio", "text"],
             instructions: "Say hello in English."
         )))
 

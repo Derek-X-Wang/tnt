@@ -40,17 +40,35 @@ final class RealtimeBilingualFixtureTests: XCTestCase {
         XCTAssertFalse(prompt.isEmpty)
     }
 
-    func testBilingualSessionUpdateCarriesCanonicalShape() throws {
+    func testBilingualSessionUpdateCarriesCanonicalGAShape() throws {
         let update = SessionUpdate.bilingualV0()
         let json = try JSONEncoder().encode(update)
         let object = try JSONSerialization.jsonObject(with: json) as? [String: Any]
         XCTAssertEqual(object?["type"] as? String, "session.update")
         let session = object?["session"] as? [String: Any]
         XCTAssertNotNil(session)
-        XCTAssertEqual(session?["voice"] as? String, "alloy")
-        XCTAssertEqual(session?["language"] as? [String], ["en", "zh"])
-        XCTAssertEqual(session?["modalities"] as? [String], ["audio", "text"])
+        // GA shape: type=realtime, output_modalities, voice nested under
+        // audio.output, PCM16 24kHz format objects, no top-level language.
+        XCTAssertEqual(session?["type"] as? String, "realtime")
+        // GA rejects ["audio","text"] — audio-only (transcript comes free).
+        XCTAssertEqual(session?["output_modalities"] as? [String], ["audio"])
         XCTAssertEqual(session?["instructions"] as? String, RealtimePrompts.v0System)
+        XCTAssertNil(session?["language"], "GA has no top-level language field.")
+        XCTAssertNil(session?["modalities"], "GA renamed modalities → output_modalities.")
+
+        let audio = session?["audio"] as? [String: Any]
+        let output = audio?["output"] as? [String: Any]
+        XCTAssertEqual(output?["voice"] as? String, "marin")
+        let outFormat = output?["format"] as? [String: Any]
+        XCTAssertEqual(outFormat?["type"] as? String, "audio/pcm")
+        XCTAssertEqual(outFormat?["rate"] as? Int, 24_000)
+
+        let input = audio?["input"] as? [String: Any]
+        let inFormat = input?["format"] as? [String: Any]
+        XCTAssertEqual(inFormat?["type"] as? String, "audio/pcm")
+        // turn_detection must be present + null (disables server VAD for PTT).
+        XCTAssertTrue(input?.keys.contains("turn_detection") ?? false)
+        XCTAssertTrue(input?["turn_detection"] is NSNull)
     }
 
     func testBilingualSessionUpdateRespectsVoiceOverride() throws {
@@ -58,7 +76,8 @@ final class RealtimeBilingualFixtureTests: XCTestCase {
         let json = try JSONEncoder().encode(update)
         let object = try JSONSerialization.jsonObject(with: json) as? [String: Any]
         let session = object?["session"] as? [String: Any]
-        XCTAssertEqual(session?["voice"] as? String, "verse")
+        let output = (session?["audio"] as? [String: Any])?["output"] as? [String: Any]
+        XCTAssertEqual(output?["voice"] as? String, "verse")
     }
 
     // MARK: - Helpers
@@ -76,7 +95,7 @@ final class RealtimeBilingualFixtureTests: XCTestCase {
         try await client.send(InputAudioBufferAppend(audio: "AAA="))
         try await client.send(InputAudioBufferAppend(audio: "BBB="))
         try await client.send(InputAudioBufferCommit())
-        try await client.send(ResponseCreate(response: .init(modalities: ["audio", "text"])))
+        try await client.send(ResponseCreate())
 
         // Inject the recorded server-side responses.
         for raw in fixture.inbound {

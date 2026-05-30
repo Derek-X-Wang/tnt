@@ -4,16 +4,18 @@ import XCTest
 /// `OpenAIRealtimeWSClient` integration tests over a `MockTransport`.
 final class RealtimeWSClientTests: XCTestCase {
 
-    func testUpgradeRequestCarriesAuthBetaAndZDRHeaders() {
+    func testUpgradeRequestCarriesOnlyBearerForGA() {
         let client = OpenAIRealtimeWSClient(
             apiKey: "sk-test",
             transport: MockTransport()
         )
         let request = client.makeRequest()
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "OpenAI-Beta"), "realtime=v1")
-        XCTAssertEqual(request.value(forHTTPHeaderField: OpenAIRealtimeWSClient.zdrHeader), "true",
-                       "ZDR request header per ADR-0004 must be set on every upgrade.")
+        // GA `/v1/realtime` must NOT carry the beta header — it routes the
+        // request to the removed beta surface and the server drops the
+        // socket ("The Realtime Beta API is no longer supported").
+        XCTAssertNil(request.value(forHTTPHeaderField: "OpenAI-Beta"),
+                     "GA upgrade must not send the OpenAI-Beta header.")
         XCTAssertTrue(request.url?.absoluteString.contains("model=gpt-realtime-2") ?? false,
                       "Default model goes onto the URL as the `model` query parameter.")
     }

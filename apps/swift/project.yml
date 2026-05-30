@@ -41,6 +41,18 @@ settings:
     # for unsigned CI builds.
     ENABLE_HARDENED_RUNTIME: YES
     OTHER_CODE_SIGN_FLAGS: "--timestamp"
+  configs:
+    Debug:
+      # Pin local Debug builds to a real Apple Development cert so the
+      # code-signing Designated Requirement stays CN/Team-based (stable
+      # across rebuilds) instead of falling back to ad-hoc "Sign to Run
+      # Locally", whose DR is cdhash-based and changes every single build.
+      # macOS TCC grants — Input Monitoring (the global ⌃⌥Space hotkey
+      # tap) and Microphone — are keyed on the DR, so a stable DR means
+      # the user approves those permissions ONCE and they survive every
+      # rebuild, instead of silently revoking each time the binary changes.
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: "Apple Development"
 
 packages:
   TNTCore:

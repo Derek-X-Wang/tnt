@@ -46,18 +46,15 @@ public struct ResponseCancel: Codable, Sendable, Equatable {
 
 public struct ResponseCreate: Codable, Sendable, Equatable {
     public struct Body: Codable, Sendable, Equatable {
-        public var modalities: [String]?
         public var instructions: String?
-
-        public init(modalities: [String]? = nil, instructions: String? = nil) {
-            self.modalities = modalities
+        public init(instructions: String? = nil) {
             self.instructions = instructions
         }
     }
     public var type: String
     public var response: Body
 
-    public init(response: Body) {
+    public init(response: Body = Body()) {
         self.type = "response.create"
         self.response = response
     }
@@ -67,8 +64,11 @@ public struct ResponseCreate: Codable, Sendable, Equatable {
 
 public struct ResponseAudioDelta: Codable, Sendable, Equatable {
     public let type: String
-    public let responseId: String
-    public let itemId: String
+    /// Optional — present on the GA event but not load-bearing for the
+    /// v0 player, so decoding never fails if the server reshapes them.
+    public let responseId: String?
+    public let itemId: String?
+    /// base64-encoded PCM16 chunk.
     public let delta: String
 
     private enum CodingKeys: String, CodingKey {
@@ -119,9 +119,11 @@ public enum RealtimeEventDecoder {
     public static func decode(from data: Data) throws -> RealtimeServerEvent {
         let envelope = try JSONDecoder().decode(Envelope.self, from: data)
         switch envelope.type {
-        case "session.created":
+        case "session.created", "session.updated":
             return .sessionCreated(try JSONDecoder().decode(SessionCreated.self, from: data))
-        case "response.audio.delta":
+        // GA renamed `response.audio.delta` → `response.output_audio.delta`;
+        // accept both so a server-side rename doesn't silence playback.
+        case "response.audio.delta", "response.output_audio.delta":
             return .responseAudioDelta(try JSONDecoder().decode(ResponseAudioDelta.self, from: data))
         case "response.done":
             return .responseDone(try JSONDecoder().decode(ResponseDone.self, from: data))

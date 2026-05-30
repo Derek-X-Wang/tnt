@@ -27,6 +27,12 @@ final class VoiceTurnController {
     private var captureDrainTask: Task<Void, Never>?
     private var inboundTask: Task<Void, Never>?
 
+    /// Count of mic frames forwarded since the current turn's `.startCapture`.
+    /// Gates commit/`response.create`: GA `input_audio_buffer.commit` errors
+    /// on an empty buffer, and `response.create` against no new user audio
+    /// responds to stale context. Reset at each capture start.
+    private var framesThisTurn = 0
+
     private weak var menuBarHost: MenuBarHost?
     private let apiKeyProvider: () throws -> String
     private let voice: String
@@ -34,7 +40,7 @@ final class VoiceTurnController {
     init(
         menuBarHost: MenuBarHost,
         apiKeyProvider: @escaping () throws -> String,
-        voice: String = "alloy"
+        voice: String = "marin"
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
@@ -45,13 +51,29 @@ final class VoiceTurnController {
     // MARK: - Hotkey edges
 
     func startListening() async {
+        TNTLog.voice.info("startListening: ensuring connection")
         await ensureConnection()
-        guard client != nil else { return }
+        guard client != nil else {
+            TNTLog.voice.error("startListening: no client after ensureConnection — aborting (see prior error)")
+            return
+        }
         apply(flow.handle(.hotkeyStartListening))
     }
 
     func stopListening() async {
+        TNTLog.voice.info("stopListening (\(self.framesThisTurn, privacy: .public) frames captured)")
         apply(flow.handle(.hotkeyStopListening))
+        // The flow optimistically moves to .thinking on release. If capture
+        // produced nothing (mic init failed, instant transport error, or an
+        // ultra-fast tap) there's no committed audio, so no response will
+        // arrive — reset to idle instead of hanging on the thinking lamp.
+        if framesThisTurn == 0 {
+            TNTLog.voice.info("stopListening: 0 frames — no response expected, resetting to idle")
+            flow = VoiceTurnFlow()
+            menuBarHost?.setState(.idle)
+            menuBarHost?.setMicLevel(nil)
+            audio.requestStopWhenDrained()
+        }
     }
 
     func tearDown() async {
@@ -74,16 +96,21 @@ final class VoiceTurnController {
         let apiKey: String
         do {
             apiKey = try apiKeyProvider()
+            TNTLog.voice.info("ensureConnection: API key loaded (len=\(apiKey.count, privacy: .public))")
         } catch {
+            TNTLog.voice.error("ensureConnection: API key missing — \(error.localizedDescription, privacy: .public)")
             menuBarHost?.setLastErrorMessage("OpenAI API key missing — Replace API Key…")
             return
         }
 
         let c = OpenAIRealtimeWSClient(apiKey: apiKey)
         do {
+            TNTLog.voice.info("ensureConnection: connecting WS…")
             try await c.connect()
+            TNTLog.voice.info("ensureConnection: WS connected")
         } catch {
             // Nothing to leak — `connect()` failed, so no live socket.
+            TNTLog.voice.error("ensureConnection: WS connect FAILED — \(error.localizedDescription, privacy: .public)")
             menuBarHost?.setLastErrorMessage("Could not connect: \(error.localizedDescription)")
             return
         }
@@ -127,13 +154,20 @@ final class VoiceTurnController {
         guard captureDrainTask == nil else { return }
         captureDrainTask = Task { [weak self] in
             guard let self else { return }
+            var frameCount = 0
             for await frame in self.audio.frames {
                 if Task.isCancelled { break }
                 let dB = AudioLevel.peakDB(from: frame)
                 let base64 = frame.base64EncodedString()
                 try? await self.client?.send(InputAudioBufferAppend(audio: base64))
                 self.menuBarHost?.setMicLevel(dB)
+                self.framesThisTurn += 1
+                frameCount += 1
+                if frameCount == 1 || frameCount % 25 == 0 {
+                    TNTLog.voice.info("captureDrain: forwarded \(frameCount, privacy: .public) mic frames (last peak \(dB, privacy: .public) dB)")
+                }
             }
+            TNTLog.voice.info("captureDrain: stream ended after \(frameCount, privacy: .public) frames")
         }
     }
 
@@ -142,13 +176,18 @@ final class VoiceTurnController {
         case .responseAudioDelta(let delta):
             apply(flow.handle(.audioDelta(delta.delta)))
         case .responseDone:
+            TNTLog.voice.info("serverEvent: response.done")
             apply(flow.handle(.responseDone))
         case .error(let err):
             let summary = err.error.message ?? err.error.code ?? "Realtime error"
+            TNTLog.voice.error("serverEvent: error — \(summary, privacy: .public)")
             apply(flow.handle(.responseError(summary)))
             // Drop the dead client so the next hotkey press reconnects.
             self.client = nil
-        case .sessionCreated, .unknown:
+        case .sessionCreated:
+            TNTLog.voice.info("serverEvent: session.created")
+            return
+        case .unknown:
             return
         }
     }
@@ -162,11 +201,17 @@ final class VoiceTurnController {
                 menuBarHost?.setState(state)
                 if state == .idle {
                     menuBarHost?.setMicLevel(nil)
+                    // Release the mic once the reply finishes playing, so
+                    // the macOS mic-in-use indicator clears between turns.
+                    audio.requestStopWhenDrained()
                 }
             case .startCapture:
+                framesThisTurn = 0
                 do {
                     try audio.startCapture()
+                    TNTLog.voice.info("startCapture: mic engine started, forwarding frames")
                 } catch {
+                    TNTLog.voice.error("startCapture FAILED — \(error.localizedDescription, privacy: .public)")
                     menuBarHost?.setLastErrorMessage("Mic start failed: \(error.localizedDescription)")
                 }
             case .stopCapture:
@@ -188,12 +233,15 @@ final class VoiceTurnController {
     }
 
     private func sendCommitAndCreate() {
+        guard framesThisTurn > 0 else {
+            TNTLog.voice.error("sendCommitAndCreate: 0 frames captured — skipping commit/response.create (GA errors on an empty buffer)")
+            return
+        }
         let client = self.client
         Task {
+            TNTLog.voice.info("sendCommitAndCreate: committing buffer + requesting response")
             try? await client?.send(InputAudioBufferCommit())
-            try? await client?.send(ResponseCreate(response: .init(
-                modalities: ["audio", "text"]
-            )))
+            try? await client?.send(ResponseCreate())
         }
     }
 
