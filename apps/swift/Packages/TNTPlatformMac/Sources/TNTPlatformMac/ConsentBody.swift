@@ -75,7 +75,7 @@ public struct ConsentBody: Sendable, Equatable {
         Section(
             id: .zdrHeader,
             title: "Zero Data Retention",
-            english: "Every request to OpenAI carries a Zero Data Retention header. If your OpenAI organization has ZDR enabled, OpenAI does not retain the request.",
+            english: "If your OpenAI organization has Zero Data Retention (ZDR) enabled, OpenAI does not retain your requests. ZDR is configured on your OpenAI account, not by TNT.",
             mandarin: nil
         ),
         Section(
