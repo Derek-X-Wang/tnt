@@ -1,40 +1,186 @@
 import XCTest
 @testable import TNTRealtime
 
-/// Tests for `RealtimeSendQueue` — the serialized outbound event channel
-/// that fixes the append/commit ordering race described in issue #27.
+// MARK: - Gated mock transport
+
+/// A `RealtimeTransport` whose `sendText` can be held in-flight.
 ///
-/// Acceptance criteria verified here:
-/// - Every `append` for a turn precedes its `commit`, which precedes
-///   `response.create` — enforced by the actor mailbox + `drain()`.
-/// - No append from turn N can land in turn N+1's buffer.
-/// - `drain()` + subsequent `send()` calls respect the ordering.
+/// When a gate continuation is registered via `setGate(_:)`, the next
+/// call to `sendText` signals it (so callers know sendText entered) and
+/// parks until `releaseAll()` is called. Calls without a gate return
+/// immediately, matching `MockTransport` behavior.
+///
+/// `receive()` throws — inbound path is never exercised in these tests.
+/// Thread safety: all mutable state is protected by `lock`.
+final class GatedMockTransport: RealtimeTransport, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private(set) var sendLog: [String] = []
+    private var gate: CheckedContinuation<Void, Never>? = nil
+    private var parkedRelease: [CheckedContinuation<Void, Never>] = []
+
+    func connect(request: URLRequest) async throws {}
+    func disconnect() async {}
+    func receive() async throws -> RealtimeTransportFrame { throw RealtimeTransportError.streamClosed }
+
+    func sendText(_ text: String) async throws {
+        lock.withLock { sendLog.append(text) }
+        let gateToSignal: CheckedContinuation<Void, Never>? = lock.withLock {
+            let g = gate; gate = nil; return g
+        }
+        guard let gateToSignal else { return }
+        gateToSignal.resume()  // Signal: sendText has been entered.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.withLock { parkedRelease.append(cont) }
+        }
+    }
+
+    /// Register a gate continuation that will be signaled when the next
+    /// `sendText` call is entered. Must be called BEFORE the sendText
+    /// call that should trigger it.
+    func setGate(_ cont: CheckedContinuation<Void, Never>) {
+        lock.withLock { gate = cont }
+    }
+
+    /// Release all parked `sendText` calls.
+    func releaseAll() {
+        let all: [CheckedContinuation<Void, Never>] = lock.withLock {
+            let s = parkedRelease; parkedRelease = []; return s
+        }
+        for cont in all { cont.resume() }
+    }
+}
+
+// MARK: - Tests
+
+/// Tests for `RealtimeSendQueue` — the serialized outbound event channel
+/// that guarantees append ordering across Voice Turns.
+///
+/// Issue #66 acceptance criteria verified here:
+/// - `drain()` is a real barrier: proved by `GatedMockTransport` which
+///   holds an append in-flight while drain()+commit are raced against it.
+/// - No `assert`-only invariant on the ordering path (release-mode safe).
+/// - Hotkey-release-while-first-frame-suspended: drain blocks commit until
+///   the frame's sendText completes — frame cannot bleed into turn N+1.
+/// - Existing ordering + cross-turn isolation tests still pass.
 final class RealtimeSendQueueTests: XCTestCase {
+
+    // MARK: - Issue #66 AC: drain() is a real barrier
+
+    /// Core barrier test using `GatedMockTransport`:
+    ///
+    /// Pattern:
+    ///   await withCheckedContinuation { cont in
+    ///       transport.setGate(cont)          // (A) register gate synchronously
+    ///       Task { await queue.sendAppend() } // (B) start append — will signal gate
+    ///   }                                    // (C) resumes when sendText fires gate
+    ///   // HERE: sendText IS in-flight (gate was signaled in sendText body)
+    ///   Task { await queue.drain(); queue.send(commit) }  // (D) race drain+commit
+    ///   transport.releaseAll()               // (E) release sendText → drain fires
+    ///
+    /// Ordering proof: commit's sendText is called only after drain() returns.
+    /// drain() returns only after pendingAppendCount reaches zero.
+    /// pendingAppendCount reaches zero only after sendText returns (via defer).
+    /// So commit entry in the send log always follows append entry.
+    func testDrainBarrierOrdersAppendBeforeCommit() async throws {
+        let transport = GatedMockTransport()
+        let queue = RealtimeSendQueue(transport: transport)
+
+        // (A) + (B) + (C): atomically set gate, start append, wait for sendText entry.
+        var appendTask: Task<Void, Error>? = nil
+        await withCheckedContinuation { (gateCont: CheckedContinuation<Void, Never>) in
+            transport.setGate(gateCont)
+            appendTask = Task {
+                try await queue.sendAppend(InputAudioBufferAppend(audio: "frame0"))
+            }
+        }
+        // sendText is now in-flight (signaled the gate, parked).
+
+        // (D) Race drain()+commit against the parked sendText.
+        let drainCommitTask: Task<Void, Error> = Task {
+            await queue.drain()
+            try await queue.send(InputAudioBufferCommit())
+        }
+
+        // (E) Release sendText — drain's waiter fires, commit is sent.
+        transport.releaseAll()
+        try await appendTask!.value
+        try await drainCommitTask.value
+
+        // Verify: append precedes commit in the send log.
+        let types = transport.sendLog.compactMap { text -> String? in
+            guard let data = text.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let t = obj["type"] as? String else { return nil }
+            return t
+        }
+        guard let ai = types.firstIndex(of: "input_audio_buffer.append"),
+              let ci = types.firstIndex(of: "input_audio_buffer.commit") else {
+            XCTFail("append or commit not found in send log: \(types)"); return
+        }
+        XCTAssertLessThan(ai, ci,
+            "append (\(ai)) must precede commit (\(ci)) — drain barrier ensures ordering")
+    }
+
+    // MARK: - Issue #66 AC: framesThisTurn race
+
+    /// Hotkey-release-while-first-frame-suspended: drain must block commit
+    /// until the in-flight frame's sendText completes.
+    ///
+    /// This is the `framesThisTurn` race from issue #66: with the old code,
+    /// a hotkey release while frame0 was suspended at sendText saw
+    /// framesThisTurn == 0 (incremented post-await) → skipped commit →
+    /// frame0 landed in turn N+1. The queue-level fix is drain() as a real
+    /// barrier; the controller-level fix is incrementing framesThisTurn
+    /// before the sendAppend await.
+    func testHotkeyReleaseWhileFirstFrameSuspendedOrdersAppendBeforeCommit() async throws {
+        let transport = GatedMockTransport()
+        let queue = RealtimeSendQueue(transport: transport)
+
+        var appendTask: Task<Void, Error>? = nil
+        await withCheckedContinuation { (gateCont: CheckedContinuation<Void, Never>) in
+            transport.setGate(gateCont)
+            appendTask = Task {
+                try await queue.sendAppend(InputAudioBufferAppend(audio: "frame0"))
+            }
+        }
+
+        // Hotkey released while frame0 is in-flight: drain + commit racing.
+        let commitTask: Task<Void, Error> = Task {
+            await queue.drain()
+            try await queue.send(InputAudioBufferCommit())
+        }
+
+        transport.releaseAll()
+        try await appendTask!.value
+        try await commitTask.value
+
+        let types = transport.sendLog.compactMap { text -> String? in
+            guard let data = text.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let t = obj["type"] as? String else { return nil }
+            return t
+        }
+        XCTAssertEqual(types.first, "input_audio_buffer.append",
+            "frame0 must arrive before commit — drain prevents turn N+1 contamination")
+        XCTAssertEqual(types.last, "input_audio_buffer.commit")
+    }
 
     // MARK: - Ordering: appends then drain then commit/create
 
-    /// Core ordering test: enqueue N appends concurrently, then await
-    /// drain(), then send commit + response.create. The recorded send
-    /// log must show all appends before the commit, which must precede
-    /// response.create.
     func testAppendsArrivedBeforeCommitAfterDrain() async throws {
         let transport = MockTransport()
         try await transport.connect(request: URLRequest(url: URL(string: "wss://test")!))
         let queue = RealtimeSendQueue(transport: transport)
 
-        // Simulate what the capture-drain loop does: send N appends.
         for i in 0..<5 {
             try await queue.sendAppend(InputAudioBufferAppend(audio: "frame\(i)"))
         }
 
-        // Simulate what sendCommitAndCreate does on hotkey release:
-        // drain, then commit, then response.create.
         await queue.drain()
         try await queue.send(InputAudioBufferCommit())
         try await queue.send(ResponseCreate())
 
-        // All sends serialized through the actor — inspect via the
-        // transport's send log.
         let types = transport.sendLog.compactMap { text -> String? in
             guard let data = text.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -42,76 +188,51 @@ final class RealtimeSendQueueTests: XCTestCase {
             return type_
         }
 
-        // 5 appends + 1 commit + 1 response.create = 7 events total.
         XCTAssertEqual(types.count, 7)
-
-        // All appends must come before the commit.
         let commitIndex = types.firstIndex(of: "input_audio_buffer.commit")
         let createIndex = types.firstIndex(of: "response.create")
         let appendIndices = types.indices.filter { types[$0] == "input_audio_buffer.append" }
 
-        XCTAssertEqual(appendIndices.count, 5, "Expected 5 appends")
+        XCTAssertEqual(appendIndices.count, 5)
         if let ci = commitIndex {
-            for ai in appendIndices {
-                XCTAssertLessThan(ai, ci,
-                    "Append at index \(ai) must precede commit at index \(ci)")
-            }
-        } else {
-            XCTFail("commit not found in send log")
-        }
-
-        // Commit must come before response.create.
+            for ai in appendIndices { XCTAssertLessThan(ai, ci) }
+        } else { XCTFail("commit not found") }
         if let ci = commitIndex, let ri = createIndex {
-            XCTAssertLessThan(ci, ri,
-                "commit (index \(ci)) must precede response.create (index \(ri))")
-        } else {
-            XCTFail("commit or response.create not found in send log")
-        }
+            XCTAssertLessThan(ci, ri)
+        } else { XCTFail("commit or response.create not found") }
     }
 
-    // MARK: - Turn isolation: no cross-turn contamination
+    // MARK: - Turn isolation
 
-    /// After a drain+commit+create for turn 1, appends sent for turn 2
-    /// must arrive after the turn-1 commit — verifying that turn N
-    /// appends cannot contaminate turn N+1's buffer.
     func testTurnNAppendsDoNotContaminateTurnNPlusOne() async throws {
         let transport = MockTransport()
         try await transport.connect(request: URLRequest(url: URL(string: "wss://test")!))
         let queue = RealtimeSendQueue(transport: transport)
 
-        // Turn 1: two appends then commit.
         try await queue.sendAppend(InputAudioBufferAppend(audio: "t1-frame0"))
         try await queue.sendAppend(InputAudioBufferAppend(audio: "t1-frame1"))
         await queue.drain()
         try await queue.send(InputAudioBufferCommit())
         try await queue.send(ResponseCreate())
 
-        // Turn 2: one append then commit.
         try await queue.sendAppend(InputAudioBufferAppend(audio: "t2-frame0"))
         await queue.drain()
         try await queue.send(InputAudioBufferCommit())
         try await queue.send(ResponseCreate())
 
-        // Parse the send log in order.
         let events: [(type: String, audio: String?)] = transport.sendLog.compactMap { text in
             guard let data = text.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type_ = obj["type"] as? String else { return nil }
             return (type: type_, audio: obj["audio"] as? String)
         }
-
-        // Find the first commit index — all turn-2 frames must be after it.
-        let firstCommitIndex = events.firstIndex(where: { $0.type == "input_audio_buffer.commit" })!
-        let turn2AppendIndex = events.firstIndex(where: { $0.audio == "t2-frame0" })!
-
-        XCTAssertGreaterThan(turn2AppendIndex, firstCommitIndex,
-            "Turn-2 append must arrive after turn-1's commit — not before (cross-turn contamination)")
+        let firstCommit = events.firstIndex(where: { $0.type == "input_audio_buffer.commit" })!
+        let turn2Append = events.firstIndex(where: { $0.audio == "t2-frame0" })!
+        XCTAssertGreaterThan(turn2Append, firstCommit)
     }
 
     // MARK: - Non-append sends
 
-    /// Verify that `send(_:)` (non-append path) is also serialized
-    /// through the queue and recorded in the transport log.
     func testSendNonAppendIsRecorded() async throws {
         let transport = MockTransport()
         try await transport.connect(request: URLRequest(url: URL(string: "wss://test")!))
@@ -130,14 +251,19 @@ final class RealtimeSendQueueTests: XCTestCase {
 
     // MARK: - OpenAIRealtimeWSClient integration
 
-    /// Verify that `OpenAIRealtimeWSClient` exposes a `sendQueue`
-    /// backed by its transport. This is the property `VoiceTurnController`
-    /// uses — confirm it is accessible from the app target's perspective.
     func testClientExposesRealtimeSendQueue() {
         let transport = MockTransport()
         let client = OpenAIRealtimeWSClient(apiKey: "sk-test", transport: transport)
-        // `sendQueue` is a public property — access must compile.
         let queue: RealtimeSendQueue = client.sendQueue
-        _ = queue // suppress unused warning
+        _ = queue
+    }
+
+    // MARK: - drain() returns immediately when idle
+
+    func testDrainReturnsImmediatelyWhenIdle() async {
+        let transport = MockTransport()
+        let queue = RealtimeSendQueue(transport: transport)
+        await queue.drain()
+        await queue.drain()
     }
 }

@@ -5,21 +5,19 @@
 // Problem (issue #27): mic-frame `input_audio_buffer.append` events
 // are fired from the long-lived capture-drain loop, while
 // `input_audio_buffer.commit` + `response.create` are fired from a
-// separate unstructured `Task`. Both run on the MainActor but
-// interleave at `await` points — a frame already yielded by the
-// `RealtimeAudioSession` AsyncStream but not yet `await`-sent can
-// land **after** the commit, clipping the tail of the user's speech
-// or contaminating the next turn's buffer.
+// separate Task. Both run through this actor but interleave at `await`
+// points — a frame already issued via `sendAppend` but suspended at
+// `await transport.sendText` can be re-entered by a concurrent
+// `drain()` call, causing `drain()` to return before the transport
+// write completes. The prior fix used `assert`, which compiles out in
+// release and therefore provided no real barrier.
 //
-// Fix: funnel every outbound send through this actor. A single
-// `pendingAppendCount` counter tracks how many appends are in-flight.
-// `drain()` suspends until the counter reaches zero, then the caller
-// sends commit + response.create — guaranteed to arrive after all
-// preceding appends.
-//
-// All sends are serialized through the actor's mailbox (FIFO), so by
-// the time `drain()` executes, all prior `sendAppend` calls have
-// already completed.
+// Fix (issue #66): `drain()` is now a true barrier. When
+// `pendingAppendCount > 0` it parks on a `CheckedContinuation`
+// stored in `drainWaiters`. Every time `pendingAppendCount` reaches
+// zero, all parked continuations are resumed. This ensures commit +
+// response.create cannot be sent until every preceding
+// `transport.sendText` for the current turn has completed.
 
 import Foundation
 
@@ -34,11 +32,15 @@ public actor RealtimeSendQueue {
 
     private let transport: RealtimeTransport
 
-    /// Count of `sendAppend` calls currently executing. Because the
-    /// actor serializes all calls, this is always 0 by the time
-    /// `drain()` runs — the field exists to surface ordering bugs in
-    /// tests and DEBUG builds via the assertion in `drain()`.
+    /// Count of `sendAppend` calls currently awaiting their
+    /// `transport.sendText`. Incremented synchronously before the
+    /// transport await, decremented in `defer` after.
     private var pendingAppendCount: Int = 0
+
+    /// Continuations parked inside `drain()` waiting for
+    /// `pendingAppendCount` to reach zero. Resumed by
+    /// `notifyDrainWaitersIfIdle()`.
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Ordered log of all outbound event type strings. Used by tests
     /// to assert send ordering without inspecting raw JSON.
@@ -57,11 +59,17 @@ public actor RealtimeSendQueue {
     // MARK: - Append (mic frames)
 
     /// Encode and send an `input_audio_buffer.append` event.
-    /// Increments `pendingAppendCount` before the transport `await`
-    /// and decrements it after so tests can observe the count.
+    ///
+    /// Increments `pendingAppendCount` synchronously (before the
+    /// transport await) and decrements it in a `defer` after, so
+    /// `drain()` can accurately track in-flight appends and park
+    /// until they all complete.
     public func sendAppend<E: Encodable>(_ event: E) async throws {
         pendingAppendCount += 1
-        defer { pendingAppendCount -= 1 }
+        defer {
+            pendingAppendCount -= 1
+            notifyDrainWaitersIfIdle()
+        }
         try await sendRaw(event, typeHint: "input_audio_buffer.append")
     }
 
@@ -72,16 +80,21 @@ public actor RealtimeSendQueue {
     /// `input_audio_buffer.commit` + `response.create` — they are
     /// guaranteed to arrive after every append for the current turn.
     ///
-    /// Actor serialization guarantees the invariant: because
-    /// `sendAppend()` calls are serialized through this actor's FIFO
-    /// mailbox, by the time `drain()` executes, all previously
-    /// enqueued `sendAppend()` calls have already completed and
-    /// `pendingAppendCount` is zero.
+    /// If `pendingAppendCount` is already zero the method returns
+    /// immediately without suspending. Otherwise it parks on a
+    /// `CheckedContinuation` that is resumed by the last in-flight
+    /// `sendAppend` when it decrements the counter to zero.
+    ///
+    /// This is the fix for the ordering hole identified in issue #66:
+    /// the previous `assert`-only implementation returned immediately
+    /// regardless of in-flight state (assert compiles out in release)
+    /// and relied on the incorrect assumption that actor re-entrancy
+    /// across `await` points is FIFO.
     public func drain() async {
-        assert(
-            pendingAppendCount == 0,
-            "RealtimeSendQueue.drain(): unexpected pending appends (\(pendingAppendCount)) — ordering invariant violated"
-        )
+        guard pendingAppendCount > 0 else { return }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            drainWaiters.append(cont)
+        }
     }
 
     // MARK: - Non-append events (commit, create, cancel, clear)
@@ -95,6 +108,21 @@ public actor RealtimeSendQueue {
     }
 
     // MARK: - Private
+
+    /// Wake all parked `drain()` waiters when `pendingAppendCount`
+    /// reaches zero. Called from the `defer` block inside `sendAppend`.
+    ///
+    /// Must be called on the actor (already satisfied because `defer`
+    /// in `sendAppend` runs on the actor after the transport await
+    /// resumes).
+    private func notifyDrainWaitersIfIdle() {
+        guard pendingAppendCount == 0, !drainWaiters.isEmpty else { return }
+        let waiters = drainWaiters
+        drainWaiters = []
+        for cont in waiters {
+            cont.resume()
+        }
+    }
 
     private func sendRaw<E: Encodable>(_ event: E, typeHint: String?) async throws {
         let data = try encoder.encode(event)
