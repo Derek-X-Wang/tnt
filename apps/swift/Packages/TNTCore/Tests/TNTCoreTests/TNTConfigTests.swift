@@ -116,4 +116,81 @@ final class TNTConfigTests: XCTestCase {
         XCTAssertEqual(config.cognitiveModel, TNTConfig.defaultCognitiveModel)
         XCTAssertEqual(config.voice, "marin")
     }
+
+    // MARK: - Issue #69: broadened plaintext-secret guard
+
+    /// Table-driven test of all variants that must be rejected.
+    /// The guard normalizes each key (lowercase + strip _/-) before
+    /// matching, so camelCase, SCREAMING_SNAKE, and kebab-case forms
+    /// all trip the check.
+    func testSecretGuardRejectsAllKnownVariants() {
+        let rejectCases: [(json: String, label: String)] = [
+            // Original variants (must remain rejected)
+            (#"{"key": "sk-..."}"#,          "bare key"),
+            (#"{"api_key": "sk-..."}"#,      "api_key"),
+            (#"{"openai_key": "sk-..."}"#,   "openai_key"),
+            (#"{"OpenAI_Key": "sk-..."}"#,   "OpenAI_Key (case variant)"),
+            // New variants caught by broadened guard (issue #69)
+            (#"{"OPENAI_API_KEY": "sk-..."}"#, "OPENAI_API_KEY (env-var form)"),
+            (#"{"apiKey": "sk-..."}"#,        "apiKey (camelCase)"),
+            (#"{"openaiKey": "sk-..."}"#,     "openaiKey (camelCase)"),
+            (#"{"api-key": "sk-..."}"#,       "api-key (kebab-case)"),
+            (#"{"token": "tok-..."}"#,         "bare token"),
+            (#"{"secret": "sec-..."}"#,        "bare secret"),
+        ]
+
+        for (json, label) in rejectCases {
+            XCTAssertThrowsError(
+                try TNTConfig.parse(Data(json.utf8)),
+                "Expected secretInPlaintextConfig for '\(label)'"
+            ) { error in
+                guard case TNTConfigError.secretInPlaintextConfig = error else {
+                    XCTFail("'\(label)': expected secretInPlaintextConfig, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
+    /// Legitimate config keys must all be accepted without error.
+    func testLegitimateConfigKeysAreAccepted() throws {
+        let json = """
+        {
+          "realtime_model": "gpt-realtime-2",
+          "language_hints": ["en", "zh"],
+          "voice": "marin",
+          "cognitive_model": "gpt-5.2"
+        }
+        """
+        let config = try TNTConfig.parse(Data(json.utf8))
+        XCTAssertEqual(config.realtimeModel, "gpt-realtime-2")
+        XCTAssertEqual(config.languageHints, ["en", "zh"])
+        XCTAssertEqual(config.voice, "marin")
+        XCTAssertEqual(config.cognitiveModel, "gpt-5.2")
+    }
+
+    /// Verify the field name normalization helper directly.
+    func testNormalizeFieldNameStripsUnderscoresAndDashes() {
+        XCTAssertEqual(TNTConfig.normalizeFieldName("OPENAI_API_KEY"), "openaiapikey")
+        XCTAssertEqual(TNTConfig.normalizeFieldName("apiKey"), "apikey")
+        XCTAssertEqual(TNTConfig.normalizeFieldName("api-key"), "apikey")
+        XCTAssertEqual(TNTConfig.normalizeFieldName("realtime_model"), "realtimemodel")
+    }
+
+    /// Verify the looksLikeSecret predicate directly with known inputs.
+    func testLooksLikeSecretMatchesExpectedCases() {
+        // Should match:
+        XCTAssertTrue(TNTConfig.looksLikeSecret("key"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("token"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("secret"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("apikey"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("openaiapikey"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("openaikey"))
+        XCTAssertTrue(TNTConfig.looksLikeSecret("openaisecret"))
+        // Should not match:
+        XCTAssertFalse(TNTConfig.looksLikeSecret("realtimemodel"))
+        XCTAssertFalse(TNTConfig.looksLikeSecret("languagehints"))
+        XCTAssertFalse(TNTConfig.looksLikeSecret("voice"))
+        XCTAssertFalse(TNTConfig.looksLikeSecret("cognitivemodel"))
+    }
 }

@@ -69,9 +69,40 @@ public struct TNTConfig: Sendable, Equatable, Codable {
         try container.encode(cognitiveModel, forKey: .cognitiveModel)
     }
 
-    /// Top-level fields that must never appear in `~/.tnt/config`. Any
-    /// case variant trips the check.
-    public static let forbiddenKeyFields: Set<String> = ["key", "api_key", "openai_key"]
+    /// Normalize a config field name for secret-guard comparison:
+    /// lowercase + strip `_` and `-` separators so that `OPENAI_API_KEY`,
+    /// `apiKey`, `api-key`, and `OpenAI_Key` all collapse to a common form.
+    static func normalizeFieldName(_ raw: String) -> String {
+        raw.lowercased()
+           .filter { $0 != "_" && $0 != "-" }
+    }
+
+    /// Returns true when a normalized field name looks like an API key /
+    /// secret that must never appear in the plaintext config.
+    ///
+    /// Broadened in issue #69 to catch common camelCase and env-var variants:
+    ///   `OPENAI_API_KEY`, `apiKey`, `openaiKey`, `api-key`, `token`, `secret`.
+    ///
+    /// Rules (applied to the normalized form):
+    ///   - Bare sensitive words: `key`, `token`, `secret`
+    ///   - Any name containing both `api` and `key`
+    ///   - Any name starting with `openai` and containing `key`, `token`, or `secret`
+    static func looksLikeSecret(_ normalized: String) -> Bool {
+        // Bare sensitive words.
+        if normalized == "key" || normalized == "token" || normalized == "secret" {
+            return true
+        }
+        // Contains both "api" and "key" (covers apikey, apiaccesskey, etc.)
+        if normalized.contains("api") && normalized.contains("key") {
+            return true
+        }
+        // OpenAI-prefixed variants (openaikey, openaitoken, openaisecret, etc.)
+        if normalized.hasPrefix("openai") &&
+           (normalized.contains("key") || normalized.contains("token") || normalized.contains("secret")) {
+            return true
+        }
+        return false
+    }
 
     /// Parse JSON bytes. The reader walks the top-level keys for the
     /// forbidden set *before* decoding so the error names the offending
@@ -87,7 +118,8 @@ public struct TNTConfig: Sendable, Equatable, Codable {
             throw TNTConfigError.malformed(reason: "top-level must be a JSON object")
         }
         for rawKey in dict.keys {
-            if forbiddenKeyFields.contains(rawKey.lowercased()) {
+            let normalized = normalizeFieldName(rawKey)
+            if looksLikeSecret(normalized) {
                 throw TNTConfigError.secretInPlaintextConfig(field: rawKey)
             }
         }
