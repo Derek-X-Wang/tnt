@@ -166,4 +166,44 @@ final class ProjectHeuristicTests: XCTestCase {
         let ref = projectRef(appName: "Cursor", windowTitle: "   ")
         XCTAssertNil(ref)
     }
+
+    // MARK: - Issue #68: ~ over-replace fix
+
+    /// A terminal path with an embedded ~ (not a leading one) must NOT
+    /// have the ~ expanded globally. The old code replaced every ~ with
+    /// "/Users/user", producing a corrupted path.
+    ///
+    ///   "/Users/dev/repo~backup" → name should be "repo~backup"
+    ///   Old code: URL("/Users/user/Users/user/repo/Users/user/backup").lastPathComponent
+    ///             = "backup" or garbled — wrong.
+    ///   New code: URL("/Users/dev/repo~backup").lastPathComponent = "repo~backup" — correct.
+    func testTerminalEmbeddedTildeNotExpanded() {
+        let ref = projectRef(
+            appName: "Terminal",
+            windowTitle: "/Users/dev/repo~backup"
+        )
+        XCTAssertEqual(ref?.name, "repo~backup",
+            "Embedded ~ must not be expanded; lastPathComponent should be repo~backup")
+    }
+
+    /// A leading ~/path must still expand correctly (leading ~ is valid home shorthand).
+    func testTerminalLeadingTildeStillYieldsCorrectName() {
+        let ref = projectRef(
+            appName: "Terminal",
+            windowTitle: "~/projects/tnt"
+        )
+        XCTAssertEqual(ref?.name, "tnt",
+            "Leading ~ must still produce the correct last path component")
+        XCTAssertEqual(ref?.path, "~/projects/tnt")
+    }
+
+    /// Embedded ~ in a path with user@host prefix is also preserved.
+    func testTerminalUserAtHostWithEmbeddedTildeInPath() {
+        let ref = projectRef(
+            appName: "Terminal",
+            windowTitle: "dev@host: /Users/dev/repo~backup"
+        )
+        XCTAssertEqual(ref?.name, "repo~backup",
+            "Embedded ~ after user@host strip must not be expanded")
+    }
 }

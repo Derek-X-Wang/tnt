@@ -97,10 +97,16 @@ public struct VoiceTurnFlow: Sendable, Equatable {
 
         // MARK: Begin / end a Voice Turn
 
-        case (.idle, .hotkeyStartListening),
-             (.thinking, .hotkeyStartListening):
+        case (.idle, .hotkeyStartListening):
             state = .listening
             return [.setState(.listening), .startCapture]
+
+        // Barge-in from .thinking: cancel the in-flight response before
+        // starting a new capture. No playback flush — nothing is playing yet.
+        // This is analogous to the .speaking interrupt (issue #68 fix).
+        case (.thinking, .hotkeyStartListening):
+            state = .listening
+            return [.sendCancelAndClear, .setState(.listening), .startCapture]
 
         case (.listening, .hotkeyStopListening):
             state = .thinking

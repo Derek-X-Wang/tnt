@@ -152,7 +152,17 @@ private func terminalProject(from title: String) -> ProjectRef? {
     }
 
     // Derive name from the last path component.
-    let url = URL(fileURLWithPath: pathString.replacingOccurrences(of: "~", with: "/Users/user"))
+    // Only expand a leading "~" or "~/", not every "~" in the string —
+    // "~/projects/repo~backup" must yield "repo~backup", not a corrupted path.
+    let expanded: String
+    if pathString == "~" {
+        expanded = "/Users/user"
+    } else if pathString.hasPrefix("~/") {
+        expanded = "/Users/user" + pathString.dropFirst()
+    } else {
+        expanded = pathString
+    }
+    let url = URL(fileURLWithPath: expanded)
     let lastComponent = url.lastPathComponent
     guard !lastComponent.isEmpty, lastComponent != "/" else { return nil }
 
