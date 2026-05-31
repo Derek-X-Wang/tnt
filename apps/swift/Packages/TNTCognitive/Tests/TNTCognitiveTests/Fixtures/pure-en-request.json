@@ -1,0 +1,23 @@
+{
+  "name": "pure-en",
+  "description": "Pure English Voice Turn — verifies the system prompt, few-shot examples, and user message are all present and in order.",
+  "input": {
+    "target_key": "claude-code",
+    "target_display_name": "Claude Code",
+    "intent": "add a unit test to rate-limit middleware",
+    "raw": "um, I want you to add, uh, a unit test to the rate-limit middleware. The test should mock the bucket.",
+    "capture_app": "Cursor",
+    "capture_project": "tnt"
+  },
+  "expectations": {
+    "message_count": 8,
+    "first_role": "system",
+    "last_role": "user",
+    "last_content_contains_target": "Claude Code",
+    "last_content_contains_raw": "rate-limit middleware",
+    "last_content_contains_project": "tnt",
+    "last_content_contains_app": "Cursor",
+    "system_message_contains": ["Rewrite", "technical terms", "English"],
+    "technical_term_preserved": "rate-limit"
+  }
+}
