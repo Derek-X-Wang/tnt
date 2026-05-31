@@ -78,4 +78,42 @@ final class TNTConfigTests: XCTestCase {
         // A bare array or string at the top level is not a valid config.
         XCTAssertThrowsError(try TNTConfig.parse(Data("[1,2,3]".utf8)))
     }
+
+    // MARK: - cognitiveModel (issue #29)
+
+    func testCognitiveModelDefaultsToGPT52() throws {
+        // An empty config must produce the default cognitive model,
+        // not nil — so LocalOpenAIEngine always has a model to call.
+        let config = try TNTConfig.parse(Data("{}".utf8))
+        XCTAssertEqual(config.cognitiveModel, TNTConfig.defaultCognitiveModel)
+        XCTAssertEqual(config.cognitiveModel, "gpt-5.2")
+    }
+
+    func testCognitiveModelOverrideIsHonored() throws {
+        let json = #"{"cognitive_model": "gpt-4o"}"#
+        let config = try TNTConfig.parse(Data(json.utf8))
+        XCTAssertEqual(config.cognitiveModel, "gpt-4o",
+            "cognitive_model in config must override the default")
+    }
+
+    func testCognitiveModelRoundTripsWithOtherFields() throws {
+        let json = """
+        {
+          "realtime_model": "gpt-realtime-2",
+          "cognitive_model": "gpt-4-turbo"
+        }
+        """
+        let config = try TNTConfig.parse(Data(json.utf8))
+        XCTAssertEqual(config.realtimeModel, "gpt-realtime-2")
+        XCTAssertEqual(config.cognitiveModel, "gpt-4-turbo")
+    }
+
+    func testCognitiveModelDefaultWhenAbsentFromConfigFile() throws {
+        // Simulate a config that existed before cognitiveModel was added.
+        // The field must default gracefully — no parse error.
+        let json = #"{"voice": "marin"}"#
+        let config = try TNTConfig.parse(Data(json.utf8))
+        XCTAssertEqual(config.cognitiveModel, TNTConfig.defaultCognitiveModel)
+        XCTAssertEqual(config.voice, "marin")
+    }
 }

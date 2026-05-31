@@ -20,20 +20,53 @@ public struct TNTConfig: Sendable, Equatable, Codable {
     /// without rebuilding.
     public var voice: String?
 
+    /// The non-Realtime model used by the **Cognitive Engine** for
+    /// Rewrites, summarization, and (M4) vision-route Appshot answers.
+    /// Per CONTEXT.md: "the Realtime model is NOT a Cognitive Engine"
+    /// — this is a separate model field for a separate concern.
+    /// Defaults to `"gpt-5.2"` when omitted.
+    public var cognitiveModel: String
+
+    /// Default cognitive model. Matches the `LocalOpenAIEngine` default
+    /// and the M4 vision-route spec in ADR-0006.
+    public static let defaultCognitiveModel = "gpt-5.2"
+
     public init(
         realtimeModel: String? = nil,
         languageHints: [String]? = nil,
-        voice: String? = nil
+        voice: String? = nil,
+        cognitiveModel: String = TNTConfig.defaultCognitiveModel
     ) {
         self.realtimeModel = realtimeModel
         self.languageHints = languageHints
         self.voice = voice
+        self.cognitiveModel = cognitiveModel
     }
 
     private enum CodingKeys: String, CodingKey {
         case realtimeModel = "realtime_model"
         case languageHints = "language_hints"
         case voice
+        case cognitiveModel = "cognitive_model"
+    }
+
+    // MARK: - Custom Codable for cognitiveModel default
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.realtimeModel = try container.decodeIfPresent(String.self, forKey: .realtimeModel)
+        self.languageHints = try container.decodeIfPresent([String].self, forKey: .languageHints)
+        self.voice = try container.decodeIfPresent(String.self, forKey: .voice)
+        self.cognitiveModel = try container.decodeIfPresent(String.self, forKey: .cognitiveModel)
+            ?? TNTConfig.defaultCognitiveModel
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(realtimeModel, forKey: .realtimeModel)
+        try container.encodeIfPresent(languageHints, forKey: .languageHints)
+        try container.encodeIfPresent(voice, forKey: .voice)
+        try container.encode(cognitiveModel, forKey: .cognitiveModel)
     }
 
     /// Top-level fields that must never appear in `~/.tnt/config`. Any
