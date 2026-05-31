@@ -16,7 +16,9 @@
 //                     "turn_detection": null },
 //         "output": { "format": {"type":"audio/pcm","rate":24000},
 //                     "voice": "marin" }
-//       }
+//       },
+//       "tools": [...],        // optional — M1+ only
+//       "tool_choice": "auto"  // optional — "auto" | "none" | "required"
 //     }
 //   }
 //
@@ -30,6 +32,51 @@
 // release, so server-side VAD must not also auto-respond.
 
 import Foundation
+
+// MARK: - RealtimeTool
+
+/// A function tool registered on the Realtime session so the model can
+/// call it mid-conversation. The `parameters` field is an arbitrary
+/// JSON Schema object (e.g. `{"type":"object","properties":{...}}`).
+///
+/// GA wire key: `"type": "function"`. The `parameters` field encodes
+/// as-is — pass a `JSONValue.schema(...)` helper or an `.object([...])`
+/// literal for the JSON Schema body.
+///
+/// Per ADR-0006 and ADR-0007: the single vision tool (Appshot) and the
+/// executor tools (Voice Actions) both ride this path — the codec
+/// is intentionally type-agnostic so any tool payload is supported.
+public struct RealtimeTool: Codable, Sendable, Equatable {
+
+    /// Always `"function"` for GA Realtime tool definitions.
+    public let type: String
+
+    /// Stable snake_case tool name sent to the model
+    /// (e.g. `"compose_agent_prompt"`, `"appshot_vision"`).
+    public let name: String
+
+    /// Human-readable description the model uses to decide when to
+    /// call the tool. Keep it short and behavioural.
+    public let description: String
+
+    /// JSON Schema describing the tool's arguments object. The model
+    /// generates a JSON string conforming to this schema when it calls
+    /// the tool. Use `JSONValue.schema(...)` for common shapes.
+    public let parameters: JSONValue
+
+    public init(
+        name: String,
+        description: String,
+        parameters: JSONValue
+    ) {
+        self.type = "function"
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+    }
+}
+
+// MARK: - SessionUpdate
 
 public struct SessionUpdate: Codable, Sendable, Equatable {
 
@@ -96,11 +143,24 @@ public struct SessionUpdate: Codable, Sendable, Equatable {
         public var instructions: String?
         public var audio: Audio
 
+        /// Function tools available to the model during the session.
+        /// Nil = no tools (the model is conversational only).
+        /// Set to the vision tool + executor tools when M1/M4/M5 land.
+        public var tools: [RealtimeTool]?
+
+        /// How the model selects tools. `"auto"` (default) lets the
+        /// model decide; `"none"` disables tool calling even if tools
+        /// are registered; `"required"` forces a tool call.
+        /// GA key: `"tool_choice"`.
+        public var toolChoice: String?
+
         private enum CodingKeys: String, CodingKey {
             case type
             case outputModalities = "output_modalities"
             case instructions
             case audio
+            case tools
+            case toolChoice = "tool_choice"
         }
 
         public init(
@@ -111,12 +171,16 @@ public struct SessionUpdate: Codable, Sendable, Equatable {
             // spoken reply. (Verified against the Realtime GA reference.)
             outputModalities: [String] = ["audio"],
             instructions: String? = nil,
-            audio: Audio
+            audio: Audio,
+            tools: [RealtimeTool]? = nil,
+            toolChoice: String? = nil
         ) {
             self.type = type
             self.outputModalities = outputModalities
             self.instructions = instructions
             self.audio = audio
+            self.tools = tools
+            self.toolChoice = toolChoice
         }
     }
 
