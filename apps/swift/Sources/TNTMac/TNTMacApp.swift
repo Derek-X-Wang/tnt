@@ -209,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let summary = err.error.message ?? err.error.code ?? "Realtime error"
                 menuBarHost?.setLastErrorMessage("Realtime: \(summary)")
                 break
-            case .sessionCreated, .unknown:
+            case .sessionCreated, .unknown, .functionCallArgumentsDone:
                 continue
             }
             if case .responseDone = event { break }

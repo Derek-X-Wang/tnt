@@ -205,6 +205,12 @@ final class VoiceTurnController {
         case .sessionCreated:
             TNTLog.voice.info("serverEvent: session.created")
             return
+        case .functionCallArgumentsDone(let callId, let name, _):
+            // Tool-call dispatch wired in M1/M4/M5. The codec now delivers
+            // the call here; the handler stub prevents compiler exhaustiveness
+            // errors and lets future tool wiring plug in without a protocol change.
+            TNTLog.voice.info("serverEvent: function_call_arguments.done — name=\(name, privacy: .public) callId=\(callId, privacy: .public) (tool wiring pending M1)")
+            return
         case .unknown:
             return
         }
