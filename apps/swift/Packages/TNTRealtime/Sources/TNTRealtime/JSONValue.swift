@@ -51,13 +51,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
 
     // MARK: - Convenience constructors
 
-    /// Construct a JSONValue from a native Swift dictionary.
-    /// Keys are strings; values must be JSONValue-compatible types:
-    /// Bool, Int, Double, String, nil, [JSONValue], [String: JSONValue].
-    public static func from(_ dict: [String: JSONValue]) -> JSONValue {
-        .object(dict)
-    }
-
     /// A convenience for building JSON Schema "object" nodes inline.
     public static func schema(
         type: String,

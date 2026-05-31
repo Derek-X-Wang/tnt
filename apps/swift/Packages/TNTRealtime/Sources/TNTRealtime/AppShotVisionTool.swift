@@ -56,26 +56,6 @@ public enum AppShotVisionTool {
         )
     )
 
-    // MARK: - Convenience
-
-    /// Build a `SessionUpdate.Body.tools` array containing the vision tool,
-    /// optionally alongside other tools (e.g. Rewrite tools from #47).
-    ///
-    /// Usage pattern for the composition root:
-    /// ```swift
-    /// let body = SessionUpdate.bilingualV0().session
-    ///     .withRewriteTools()
-    ///     .withVisionTool()
-    /// ```
-    public static func body(
-        base: SessionUpdate.Body,
-        toolChoice: String = "auto"
-    ) -> SessionUpdate.Body {
-        var copy = base
-        copy.tools = (copy.tools ?? []) + [tool]
-        copy.toolChoice = toolChoice
-        return copy
-    }
 }
 
 // MARK: - Armed appshots context note
@@ -100,9 +80,10 @@ public func armedAppshotsContextNote(count: Int) -> String {
 
 extension SessionUpdate.Body {
     /// Returns a new `Body` with the M4 vision tool appended to any existing
-    /// tools. Intended to be chained with `withRewriteTools()` at the
-    /// composition root. `toolChoice` defaults to `"auto"`.
+    /// tools. Chain with `withRewriteTools()` at the composition root, e.g.
+    /// `SessionUpdate.bilingualV0().session.withRewriteTools().withVisionTool()`.
+    /// `toolChoice` defaults to `"auto"`.
     public func withVisionTool(toolChoice: String = "auto") -> SessionUpdate.Body {
-        AppShotVisionTool.body(base: self, toolChoice: toolChoice)
+        appendingTools([AppShotVisionTool.tool], toolChoice: toolChoice)
     }
 }

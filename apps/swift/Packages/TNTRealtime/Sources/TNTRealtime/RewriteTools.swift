@@ -104,9 +104,6 @@ extension SessionUpdate.Body {
     /// decides when to call compose / deliver. Pass a custom `toolChoice`
     /// to override (e.g. `"none"` during a pure-audio M0 mode).
     public func withRewriteTools(toolChoice: String = "auto") -> SessionUpdate.Body {
-        var copy = self
-        copy.tools = (copy.tools ?? []) + RewriteTools.all
-        copy.toolChoice = toolChoice
-        return copy
+        appendingTools(RewriteTools.all, toolChoice: toolChoice)
     }
 }

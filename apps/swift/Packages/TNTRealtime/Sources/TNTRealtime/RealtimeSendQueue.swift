@@ -44,6 +44,12 @@ public actor RealtimeSendQueue {
     /// to assert send ordering without inspecting raw JSON.
     private(set) public var sendLog: [String] = []
 
+    /// Reused JSON encoder. The actor serializes all access, so a single
+    /// encoder is safe and avoids re-allocating one per outbound event —
+    /// `sendRaw` is on the per-mic-frame append path (~12 events/sec while
+    /// the hotkey is held).
+    private let encoder = JSONEncoder()
+
     public init(transport: RealtimeTransport) {
         self.transport = transport
     }
@@ -91,7 +97,7 @@ public actor RealtimeSendQueue {
     // MARK: - Private
 
     private func sendRaw<E: Encodable>(_ event: E, typeHint: String?) async throws {
-        let data = try JSONEncoder().encode(event)
+        let data = try encoder.encode(event)
         guard let text = String(data: data, encoding: .utf8) else {
             throw RealtimeSendQueueError.encodingFailed
         }
