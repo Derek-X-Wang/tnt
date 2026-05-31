@@ -177,9 +177,14 @@ final class VoiceTurnController {
                 if Task.isCancelled { break }
                 let dB = AudioLevel.peakDB(from: frame)
                 let base64 = frame.base64EncodedString()
+                // Increment before the sendAppend await so that a hotkey
+                // release while the first frame is suspended sees
+                // framesThisTurn > 0 and does not skip the commit.
+                // This is the framesThisTurn race fix from issue #66:
+                // count issued frames (pre-await), not sent frames (post-await).
+                self.framesThisTurn += 1
                 try? await self.sendQueue?.sendAppend(InputAudioBufferAppend(audio: base64))
                 self.menuBarHost?.setMicLevel(dB)
-                self.framesThisTurn += 1
                 frameCount += 1
                 if frameCount == 1 || frameCount % 25 == 0 {
                     TNTLog.voice.info("captureDrain: forwarded \(frameCount, privacy: .public) mic frames (last peak \(dB, privacy: .public) dB)")
