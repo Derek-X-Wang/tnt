@@ -252,6 +252,12 @@ final class VoiceTurnController {
                 audio.resumePlayback()
             case .showError(let message):
                 menuBarHost?.setLastErrorMessage(message)
+            case .deliverRewrite(let rewrite):
+                // M1: deliver the confirmed Rewrite to the target Worker Agent.
+                // Wired in the M1 tool-dispatch issue; stub handler here prevents
+                // exhaustiveness errors and lets future wiring plug in without
+                // touching this switch again.
+                TNTLog.voice.info("deliverRewrite: rewrite confirmed (len=\(rewrite.count, privacy: .public)) — delivery wiring pending M1")
             }
         }
     }
