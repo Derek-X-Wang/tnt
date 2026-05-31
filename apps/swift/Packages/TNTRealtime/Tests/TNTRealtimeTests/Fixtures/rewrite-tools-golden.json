@@ -1,0 +1,17 @@
+{
+  "description": "Golden contract for M1 Rewrite tool schemas. Verified fields: type, name, description, parameters.type, parameters.required, parameters.additionalProperties.",
+  "compose_agent_prompt": {
+    "type": "function",
+    "name": "compose_agent_prompt",
+    "required_params": ["target", "intent", "raw_transcript"],
+    "param_schema_type": "object",
+    "additional_properties": false
+  },
+  "deliver_prompt": {
+    "type": "function",
+    "name": "deliver_prompt",
+    "required_params": [],
+    "param_schema_type": "object",
+    "additional_properties": false
+  }
+}
