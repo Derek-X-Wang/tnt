@@ -7,6 +7,14 @@
 // Reconnect: a single transport-level failure during `receive()` is
 // recovered by reconnecting once and resuming the loop. A second
 // failure surfaces as a fatal `error` event and the loop exits.
+//
+// Outbound ordering (issue #27): `sendQueue` is the single serialized
+// channel for ALL outbound events. Callers must route every send
+// through `sendQueue` rather than calling `send(_:)` directly on the
+// client, so that mic-frame appends and commit/response.create are
+// provably ordered through the same actor mailbox. `send(_:)` is kept
+// for session setup (before the first Voice Turn), which is already
+// sequentially awaited by the caller.
 
 import Foundation
 
@@ -33,12 +41,19 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
     private let endpoint: URL
     private let model: String
     private let apiKey: String
-    private let transport: RealtimeTransport
+    // `internal` so `RealtimeSendQueue` (same module) and tests can
+    // construct a queue backed by the same transport.
+    internal let transport: RealtimeTransport
     private let continuation: AsyncStream<RealtimeServerEvent>.Continuation
     private var receiveTask: Task<Void, Never>?
     private var connected: Bool = false
     private let lock = NSLock()
     private let maxReconnectAttempts: Int
+
+    /// Serialized outbound event channel. Route ALL sends through here
+    /// (except the session.update handshake, which is already awaited
+    /// linearly by `VoiceTurnController.ensureConnection`).
+    public let sendQueue: RealtimeSendQueue
 
     public init(
         apiKey: String,
@@ -51,6 +66,7 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
         self.model = model
         self.endpoint = endpoint
         self.transport = transport
+        self.sendQueue = RealtimeSendQueue(transport: transport)
         self.maxReconnectAttempts = maxReconnectAttempts
         var resolved: AsyncStream<RealtimeServerEvent>.Continuation!
         self.inbound = AsyncStream<RealtimeServerEvent> { cont in resolved = cont }

@@ -10,6 +10,11 @@
 //
 // Audio is a single `RealtimeAudioSession` (one AVAudioEngine, capture +
 // playback) — see that file for why two engines fail on real hardware.
+//
+// Outbound event ordering (issue #27): ALL sends go through
+// `sendQueue` (`RealtimeSendQueue`). Mic-frame appends and commit/
+// response.create share the same serialized actor channel, so no
+// append from a turn can land after that turn's commit.
 
 import AppKit
 import Foundation
@@ -23,6 +28,11 @@ final class VoiceTurnController {
     private var flow = VoiceTurnFlow()
     private let audio: RealtimeAudioSession
     private var client: OpenAIRealtimeWSClient?
+
+    /// Convenience accessor to the client's serialized send queue.
+    /// All outbound events (appends, commit, create, cancel, clear)
+    /// go through this queue. Nil when no client is connected.
+    private var sendQueue: RealtimeSendQueue? { client?.sendQueue }
 
     private var captureDrainTask: Task<Void, Never>?
     private var inboundTask: Task<Void, Never>?
@@ -86,6 +96,8 @@ final class VoiceTurnController {
             await client.disconnect()
         }
         client = nil
+        // sendQueue is a computed var (client?.sendQueue), so clearing
+        // client implicitly clears the queue reference.
     }
 
     // MARK: - WS lifecycle
@@ -121,9 +133,10 @@ final class VoiceTurnController {
         // Configure the session for the bilingual v0 scope on every
         // connect — the OpenAI Realtime session does not survive the
         // socket, so re-sending on reconnect keeps language hints +
-        // voice + system prompt aligned.
+        // voice + system prompt aligned. Routed through sendQueue so
+        // the session.update is serialized with all subsequent sends.
         do {
-            try await c.send(SessionUpdate.bilingualV0(voice: voice))
+            try await c.sendQueue.send(SessionUpdate.bilingualV0(voice: voice))
         } catch {
             menuBarHost?.setLastErrorMessage("Could not configure session: \(error.localizedDescription)")
         }
@@ -150,6 +163,11 @@ final class VoiceTurnController {
     /// This replaces the old per-listening-window `for await capture.frames`
     /// loop, which re-iterated a single-consumer `AsyncStream` each turn —
     /// fine on turn 1, silently empty on turn 2.
+    ///
+    /// Appends go through `sendQueue.sendAppend()` rather than the
+    /// client's `send()` directly — this is the producer side of the
+    /// ordering guarantee. `sendCommitAndCreate` calls `drain()` on
+    /// the same queue before commit, ensuring all appends arrive first.
     private func startCaptureDrain() {
         guard captureDrainTask == nil else { return }
         captureDrainTask = Task { [weak self] in
@@ -159,7 +177,7 @@ final class VoiceTurnController {
                 if Task.isCancelled { break }
                 let dB = AudioLevel.peakDB(from: frame)
                 let base64 = frame.base64EncodedString()
-                try? await self.client?.send(InputAudioBufferAppend(audio: base64))
+                try? await self.sendQueue?.sendAppend(InputAudioBufferAppend(audio: base64))
                 self.menuBarHost?.setMicLevel(dB)
                 self.framesThisTurn += 1
                 frameCount += 1
@@ -237,19 +255,26 @@ final class VoiceTurnController {
             TNTLog.voice.error("sendCommitAndCreate: 0 frames captured — skipping commit/response.create (GA errors on an empty buffer)")
             return
         }
-        let client = self.client
+        let queue = self.sendQueue
         Task {
-            TNTLog.voice.info("sendCommitAndCreate: committing buffer + requesting response")
-            try? await client?.send(InputAudioBufferCommit())
-            try? await client?.send(ResponseCreate())
+            // drain() ensures every input_audio_buffer.append for this
+            // turn has been written to the transport before the commit
+            // fires. Because drain() and all sendAppend() calls share
+            // the same actor mailbox (FIFO), drain() only executes
+            // after every preceding append has completed — this is the
+            // fix for the ordering race described in issue #27.
+            await queue?.drain()
+            TNTLog.voice.info("sendCommitAndCreate: drain complete — committing buffer + requesting response")
+            try? await queue?.send(InputAudioBufferCommit())
+            try? await queue?.send(ResponseCreate())
         }
     }
 
     private func sendCancelAndClear() {
-        let client = self.client
+        let queue = self.sendQueue
         Task {
-            try? await client?.send(ResponseCancel())
-            try? await client?.send(InputAudioBufferClear())
+            try? await queue?.send(ResponseCancel())
+            try? await queue?.send(InputAudioBufferClear())
         }
     }
 }
