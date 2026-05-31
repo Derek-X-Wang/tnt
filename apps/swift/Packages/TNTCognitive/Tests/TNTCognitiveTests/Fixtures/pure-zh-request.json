@@ -1,0 +1,21 @@
+{
+  "name": "pure-zh",
+  "description": "Pure Mandarin Voice Turn — verifies Mandarin transcript flows through unchanged into the user message.",
+  "input": {
+    "target_key": "claude-code",
+    "target_display_name": "Claude Code",
+    "intent": "add refresh token to authentication module",
+    "raw": "帮我在 authentication 模块里加一个 refresh token 的功能，就是用户 token 快过期的时候，自动续期。",
+    "capture_app": "Cursor",
+    "capture_project": "backend"
+  },
+  "expectations": {
+    "message_count": 8,
+    "first_role": "system",
+    "last_role": "user",
+    "last_content_contains_target": "Claude Code",
+    "last_content_contains_raw": "refresh token",
+    "last_content_contains_project": "backend",
+    "technical_term_preserved": "refresh token"
+  }
+}

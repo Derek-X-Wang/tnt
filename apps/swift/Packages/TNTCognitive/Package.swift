@@ -7,7 +7,23 @@ let package = Package(
     products: [
         .library(name: "TNTCognitive", targets: ["TNTCognitive"]),
     ],
+    dependencies: [
+        // TNTCore provides AgentRef, CaptureSet, AppConfig — the data
+        // shapes the Cognitive Engine works with. Per ADR-0003, this
+        // package sits on the server-future side of the Future Server
+        // Boundary (behind the CognitiveEngine protocol) while its
+        // input/output types are in the permanent-client TNTCore.
+        .package(path: "../TNTCore"),
+    ],
     targets: [
-        .target(name: "TNTCognitive"),
+        .target(
+            name: "TNTCognitive",
+            dependencies: ["TNTCore"]
+        ),
+        .testTarget(
+            name: "TNTCognitiveTests",
+            dependencies: ["TNTCognitive"],
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )

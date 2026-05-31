@@ -1,0 +1,20 @@
+{
+  "name": "code-switch",
+  "description": "Code-switched Voice Turn — the key acceptance criterion: 'rate-limit' must appear verbatim in the request content.",
+  "input": {
+    "target_key": "claude-code",
+    "target_display_name": "Claude Code",
+    "intent": "add per-IP rate-limiting with sliding window",
+    "raw": "这个 function should rate-limit 每个 IP，max 10次 per second，用 sliding window 算法，然后如果超了就返回 429。",
+    "capture_app": "Cursor",
+    "capture_project": "tnt"
+  },
+  "expectations": {
+    "message_count": 8,
+    "first_role": "system",
+    "last_role": "user",
+    "last_content_contains_raw": "rate-limit",
+    "technical_term_preserved": "rate-limit",
+    "technical_term_preserved_2": "sliding window"
+  }
+}
