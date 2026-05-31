@@ -50,6 +50,10 @@ _Avoid_: brain, LLM (too generic)
 Durable user state. v0 ships `protocol MemoryStore` with one impl `SQLiteMemoryStore` at `~/.tnt/memory.sqlite` (GRDB.swift). v0 tables: `preferences`, `corrections`, `agents`, `session_events`, `vocabulary`. `session_events` auto-prune after 7 days; everything else is forever-retention until user wipes. v1 impl will be `RemoteMemoryStore` syncing to `tnt-server`.
 _Avoid_: database, cache
 
+**Executor** (concrete, permanent client):
+The hands that perform a **Voice Action** on the OS. v0 ships the concrete `final class MacActionExecutor` (NSWorkspace + CGEvent + AX) — **not** behind a protocol. Its command set is a **closed enum** (`activateApp`, `focusWindow`, `pasteText`, `pressReturn`, later `type`, `keystroke`) — never a free-form `run(String)`. Like `HotkeyHost` and `AccessibilityClient`, it is **permanent client**: synthesizing input events needs local OS access and can never move to `tnt-server`. The **decider** of which action to perform is the **Cognitive Engine** (server-future — that is the seam that moves server-side later); the Executor only performs. The enum is the contract between decider and hands. See ADR-0007.
+_Avoid_: driver, automation engine, robot
+
 ### Data shapes
 
 **Session Event**:
@@ -63,22 +67,36 @@ v0 first-class language pair = English (en) + Mandarin Simplified (zh-Hans), wit
 One round of human speech → TNT spoken reply. Spans the realtime session lifecycle. v0 starts/ends a Voice Turn via a single configurable hotkey (default ⌃⌥Space — ⌥Space collides with Raycast): _hold_ = push-to-talk, _tap_ = toggle until next tap. Wake-word activation is post-v0.
 _Avoid_: utterance, message
 
+**Appshot Hotkey**:
+A second global hotkey (default ⌃⌥⇧Space, configurable) whose single press captures an **Appshot** of the current frontmost window and arms it into the pending **Capture Set** for the next Voice Turn. Unlike the voice hotkey it has no hold/tap distinction — one press, one capture. Distinct from the voice hotkey so grabbing context and speaking stay separate actions.
+_Avoid_: screenshot key, capture key
+
 **Rewrite**:
 The transformation from messy bilingual rambling → clean Worker Agent prompt. Distinct from generic transcription.
 _Avoid_: cleanup, fix, transcription (transcription is the pre-stage)
 
+**Voice Action**:
+A scoped OS action TNT performs on the user's behalf during a Voice Turn — "send it" (paste the Rewrite into the target Worker Agent + Return), "open Cursor", "focus the tnt window". The Realtime model invokes an executor tool live in the conversation; the **Executor** performs one action from a closed allowlist; TNT speaks a confirmation in the same voice. This is deliberately **not** Codex-style "Computer Use": TNT does not autonomously see-and-drive GUIs in a perceive→act→verify loop. The structural firewall: executor actions return **no screenshot** to the model, so it has no perception feedback to close a control loop with (only an **Appshot** returns vision). TNT stays the **Personal Master Agent** that mediates and performs narrow plumbing — it is not a GUI-puppeteering actor. See ADR-0007.
+_Avoid_: Computer Use, GUI automation, agent action (those imply autonomous driving)
+
 ### Capture & privacy
 
 **Capture Set**:
-The bundle of context signals attached to a Voice Turn. v0 set: `app_name`, `window_title`, `selected_text`, `project_name`, `workspace_path`, and (on-demand only) `screenshot` of the frontmost window. Pasteboard contents are deliberately excluded.
+The bundle of context signals attached to a Voice Turn. v0 set: `app_name`, `window_title`, `selected_text`, `project_name`, `workspace_path`, and (on-demand only) `appshots` — zero or more **Appshots** of frontmost windows. Multiple Appshots stack into one turn (e.g. "compare this design to that spec"); both hotkey-armed and voice-pulled Appshots land in the same list. Pasteboard contents are deliberately excluded.
 _Avoid_: context, payload, snapshot
 
-**On-Demand Screenshot**:
-A frontmost-window screenshot captured _only_ when the Realtime model invokes the `capture_screen` tool — typically because the user said "look at this" or "can you see…". Captured as JPEG, held in memory for the duration of the Voice Turn, never written to disk by default. Requires the macOS Screen Recording TCC permission.
-_Avoid_: vision input, screen grab (those are too generic)
+**Appshot**:
+A frontmost-window capture bundling two signals together: a window **image** (JPEG) and the window's **Window Text**. Captured on demand two ways — the user presses the **Appshot Hotkey** (arms it ahead of speaking), or, mid-Voice-Turn, the Realtime model invokes the single vision tool because the user said "look at this" / "can you see…". Either way the model engages vision through that one tool; TNT decides the source (armed Appshots if present, else a fresh frontmost-window grab). The image is reasoned about by the **Cognitive Engine** (vision-capable model), not the Realtime model. Held in memory for the duration of the Voice Turn, never written to disk by default. Requires the macOS Screen Recording TCC permission for the image and Accessibility for the Window Text. Named after the equivalent Codex feature.
+
+An Appshot is a **self-contained context unit**: at capture time it freezes not just image + Window Text but also the source window's `app_name`, `window_title`, and `project` together. So an Appshot armed in Cursor stays labeled "Cursor" even if the user switches to another app before speaking. When an armed Appshot is present, its frozen context takes precedence; speak-time auto-capture only fills fields the Appshot did not freeze.
+_Avoid_: screenshot, On-Demand Screenshot (superseded — Appshot is image **and** text), vision input, screen grab
+
+**Window Text**:
+The full text available from the frontmost window via the Accessibility API — visible text **and** text the app exposes outside the visible scroll area. One half of an Appshot. Distinct from **selected_text**, which is only the user's current highlight: Window Text is broad ("what does this whole error / email / settings panel say"), selected_text is a precise pointer ("improve _this_ function"). Both can be present in one Capture Set. Some apps (Google Docs, Gmail, Sheets, Slides) expose only the visible screenshot, not full off-screen text.
+_Avoid_: page text, OCR text (it is AX-sourced, not OCR'd)
 
 **Capture Chip**:
-Menu-bar UI element that shows what context is currently attached (e.g. "📎 247 chars from Cursor", "📸 screenshot of Cursor"). Clickable to clear or preview. Exists so the user always knows what's about to be sent to OpenAI.
+Menu-bar UI element that shows what context is currently attached (e.g. "📎 247 chars from Cursor", "📸 ×2 Cursor, Chrome"). Clickable to clear or preview. For an **Appshot** it must show the source app and a preview of the captured image **and Window Text** before the turn is sent — this pre-send visibility is what makes user-initiated Appshot capture privacy-defensible (the user sees exactly what's going to OpenAI). Exists so the user always knows what's about to be sent.
 _Avoid_: badge, indicator
 
 ## Relationships
@@ -86,6 +104,8 @@ _Avoid_: badge, indicator
 - A **User** owns one **Desktop App** install (v0).
 - **Desktop App** speaks to one **Voice Provider** at a time and many **Worker Agents** (via Local Ingest) over time.
 - A **Voice Turn** may produce a **Rewrite** that is then routed to a **Worker Agent**.
+- A **Voice Turn** may produce a **Voice Action** that the **Executor** performs on the OS (e.g. pasting the Rewrite into the target **Worker Agent**).
+- The **Cognitive Engine** decides _which_ **Voice Action** to take (v1 may plan a sequence); the **Executor** only performs it. The decider is server-future; the hands are permanent client.
 - A **Worker Agent** emits **Session Events** to **Local Ingest**, which the **Cognitive Engine** can summarize and the **Voice Provider** can speak.
 - **Memory Store** persists across **Voice Turns**; the **Voice Provider** session does not.
 
