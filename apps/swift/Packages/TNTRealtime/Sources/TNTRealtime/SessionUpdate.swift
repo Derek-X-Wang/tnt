@@ -182,6 +182,21 @@ public struct SessionUpdate: Codable, Sendable, Equatable {
             self.tools = tools
             self.toolChoice = toolChoice
         }
+
+        /// Return a copy of this Body with `newTools` appended to `tools`
+        /// and `tool_choice` set. The single primitive the per-feature
+        /// `with…Tools()` helpers (Rewrite, vision, future M5 executor
+        /// tools) delegate to, so the append + tool_choice logic lives in
+        /// exactly one place.
+        public func appendingTools(
+            _ newTools: [RealtimeTool],
+            toolChoice: String = "auto"
+        ) -> Body {
+            var copy = self
+            copy.tools = (copy.tools ?? []) + newTools
+            copy.toolChoice = toolChoice
+            return copy
+        }
     }
 
     public var type: String
