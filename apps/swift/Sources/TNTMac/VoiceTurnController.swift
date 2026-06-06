@@ -58,6 +58,19 @@ final class VoiceTurnController {
         self.audio = RealtimeAudioSession()
     }
 
+    // MARK: - Pre-warm
+
+    /// Warm the audio device at launch so the user's first Voice Turn resumes
+    /// fast instead of paying the ~1.5s device cold-open (issue #73). Runs the
+    /// blocking start off the main actor. Caller gates on mic-granted + the
+    /// PrewarmSetting toggle.
+    func prewarmAudio() {
+        let audio = self.audio
+        Task.detached(priority: .utility) {
+            audio.prewarm()
+        }
+    }
+
     // MARK: - Hotkey edges
 
     func startListening() async {

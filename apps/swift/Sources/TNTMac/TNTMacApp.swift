@@ -112,6 +112,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.voiceTurnController = voiceController
 
+        // Launch mic pre-warm (issue #73): pay the one-time ~1.5s audio-device
+        // cold-open now, in the background, so the user's FIRST Voice Turn
+        // resumes warm instead of clipping. Default-on (PrewarmSetting), and
+        // only when mic permission is ALREADY granted — so a first-ever launch
+        // (pre-onboarding) never triggers the TCC prompt out of context.
+        // Briefly lights the mic indicator at launch (the documented trade).
+        if PrewarmSetting.isEnabled(), PermissionRequester().isMicrophoneGranted() {
+            TNTLog.app.info("installRuntime: pre-warming audio device (mic granted, prewarm on)")
+            voiceController.prewarmAudio()
+        }
+
         let host = HotkeyHost(chord: chord) { [weak self, weak menu] event in
             guard let menu else { return }
             switch event {
