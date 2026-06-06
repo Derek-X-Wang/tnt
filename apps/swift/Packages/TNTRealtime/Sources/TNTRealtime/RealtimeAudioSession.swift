@@ -124,6 +124,17 @@ public final class RealtimeAudioSession: @unchecked Sendable {
             engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
         }
 
+        // Reference the input node BEFORE start(). This is load-bearing:
+        // AVAudioEngine only opens the hardware INPUT device if the input
+        // node has been realized before `start()`; otherwise it starts
+        // output-only and the mic never opens (capture yields 0 frames, no
+        // mic indicator). The old code touched the input node via
+        // `setVoiceProcessingEnabled` here, which incidentally realized it —
+        // dropping VPIO removed that side effect, so we realize it explicitly.
+        // (Reproduced + verified on hardware: no input-node ref before start
+        // → 0 frames; with this ref → frames flow. Issue #73.)
+        _ = engine.inputNode
+
         // Plain HAL capture — no VoiceProcessingIO. VPIO's system-wide
         // ducking silenced the user's other audio (YouTube/Music) for the
         // whole time the engine was alive (measured: VPIO default = other
