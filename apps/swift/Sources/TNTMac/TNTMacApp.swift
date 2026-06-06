@@ -108,7 +108,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let voiceController = VoiceTurnController(
             menuBarHost: menu,
             apiKeyProvider: { try TNTCredentials.openAIKey() },
-            voice: configuredVoice
+            voice: configuredVoice,
+            compose: { agentRef, intent, raw, capture in
+                // Per-call BYOK key fetch so a replaced key takes effect, and the
+                // concrete LocalOpenAIEngine (the server-future CognitiveEngine,
+                // ADR-0003) is named only here at the composition root.
+                let key = try TNTCredentials.openAIKey()
+                let engine: CognitiveEngine = LocalOpenAIEngine(apiKey: key)
+                return try await engine.compose(target: agentRef, intent: intent, raw: raw, capture: capture)
+            }
         )
         self.voiceTurnController = voiceController
 
