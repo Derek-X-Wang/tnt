@@ -139,8 +139,29 @@ public struct ResponseAudioDelta: Codable, Sendable, Equatable {
     }
 }
 
+/// Inbound: `response.done` fires when the Realtime model finishes a
+/// complete response (function-call or spoken audio). The compose
+/// orchestrator (issue #79) needs `response_id` and `status` to
+/// distinguish the function-call `response.done` from the spoken-confirm
+/// `response.done` and fire `.confirmationProduced` at the right moment.
+///
+/// Both new fields are optional so a minimal payload (only `type`) still
+/// decodes without error — the API may omit them on some response kinds.
 public struct ResponseDone: Codable, Sendable, Equatable {
     public let type: String
+    /// The server-assigned identifier for the completed response.
+    /// Present on the GA `response.done` frame; optional for forward
+    /// compatibility with future trimmed shapes.
+    public let responseId: String?
+    /// Completion status of the response, e.g. `"completed"` or `"failed"`.
+    /// Optional — absent fields are tolerated.
+    public let status: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case responseId = "response_id"
+        case status
+    }
 }
 
 public struct SessionCreated: Codable, Sendable, Equatable {
