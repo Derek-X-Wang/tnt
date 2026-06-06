@@ -1,15 +1,15 @@
 import XCTest
 @testable import TNTPlatformMac
 
-/// State-machine contract for the M1 `confirming` state (issue #46).
+/// State-machine contract for the M1 `confirming` state (issue #82).
 ///
-/// Acceptance criteria:
-/// - Entering confirmation stores the pending Rewrite; affirm emits
-///   exactly one deliverRewrite directive and clears it.
-/// - Decline clears without delivering.
-/// - New Voice Turn while confirming supersedes/clears the pending Rewrite.
-/// - Interruption or transport error during confirming does not deliver.
-/// - A second affirm for an already-delivered Rewrite is a no-op.
+/// Contract (hold-to-confirm, pending decoupled from AppState):
+///
+/// - In `.confirming`, a hotkey press PRESERVES the pending Rewrite and starts capture.
+/// - `.userAffirmed` delivers the pending Rewrite whenever one is set (not only in .confirming).
+/// - A new compose/.confirmationProduced while pending overwrites the pending Rewrite.
+/// - A confirm-capture turn that produces no tool call discards the pending Rewrite (decline-by-omission).
+/// - No double-delivery; decline / error / abandoned paths deliver nothing.
 final class VoiceTurnFlowConfirmingTests: XCTestCase {
 
     // MARK: - Helper: drive to confirming state
@@ -32,7 +32,7 @@ final class VoiceTurnFlowConfirmingTests: XCTestCase {
     // MARK: - Entering confirmation stores the pending Rewrite
 
     func testConfirmationProducedFromSpeakingStoresPendingRewrite() {
-        var flow = flowInConfirming(rewrite: "Add rate-limit unit tests.")
+        let flow = flowInConfirming(rewrite: "Add rate-limit unit tests.")
         XCTAssertEqual(flow.state, .confirming)
         XCTAssertEqual(flow.pendingRewrite, "Add rate-limit unit tests.")
     }
@@ -48,59 +48,150 @@ final class VoiceTurnFlowConfirmingTests: XCTestCase {
         XCTAssertEqual(flow.pendingRewrite, "Prompt text.")
     }
 
-    // MARK: - Affirm → exactly-once deliverRewrite + idle
+    // MARK: - In .confirming, hotkey PRESERVES pending Rewrite and starts capture
 
-    func testUserAffirmedDeliversRewriteAndMovesToIdle() {
-        var flow = flowInConfirming(rewrite: "Add a unit test.")
-        let directives = flow.handle(.userAffirmed)
-        XCTAssertEqual(flow.state, .idle)
-        XCTAssertNil(flow.pendingRewrite, "pendingRewrite must be cleared after affirm")
-        XCTAssertEqual(directives, [
-            .deliverRewrite("Add a unit test."),
-            .setState(.idle),
-        ])
-    }
-
-    func testDeliveryIsExactlyOnce() {
-        var flow = flowInConfirming()
-        _ = flow.handle(.userAffirmed)
-        // State is now idle; a second userAffirmed is a no-op (not confirming).
-        let directives = flow.handle(.userAffirmed)
-        XCTAssertEqual(directives, [],
-            "A second userAffirmed in a non-confirming state must be a no-op — delivery is exactly-once")
-    }
-
-    // MARK: - Decline → no deliverRewrite
-
-    func testUserDeclinedClearsPendingRewriteWithoutDelivering() {
-        var flow = flowInConfirming(rewrite: "Add a unit test.")
-        let directives = flow.handle(.userDeclined)
-        XCTAssertEqual(flow.state, .idle)
-        XCTAssertNil(flow.pendingRewrite)
-        XCTAssertEqual(directives, [.setState(.idle)])
-        // Critically: no deliverRewrite.
+    func testHotkeyStartListeningDuringConfirmingPreservesPendingRewrite() {
+        var flow = flowInConfirming(rewrite: "Pending rewrite text.")
+        let directives = flow.handle(.hotkeyStartListening)
+        // State transitions to listening (capture starts)
+        XCTAssertEqual(flow.state, .listening)
+        XCTAssertTrue(directives.contains(.startCapture),
+            "Hotkey in .confirming must start capture")
+        // Pending Rewrite is PRESERVED (not cleared)
+        XCTAssertEqual(flow.pendingRewrite, "Pending rewrite text.",
+            "Pending Rewrite must be preserved when user presses hotkey in .confirming")
+        // Must not deliver
         XCTAssertFalse(directives.contains(where: {
             if case .deliverRewrite = $0 { return true }
             return false
-        }), "Decline must not emit deliverRewrite")
+        }), "Hotkey in .confirming must not deliver the pending Rewrite")
     }
 
-    // MARK: - New Voice Turn supersedes
-
-    func testNewVoiceTurnDuringConfirmingClearsPendingWithoutDelivering() {
-        var flow = flowInConfirming(rewrite: "Stale prompt.")
+    func testHotkeyStartListeningDuringConfirmingMovesToListening() {
+        var flow = flowInConfirming()
         let directives = flow.handle(.hotkeyStartListening)
         XCTAssertEqual(flow.state, .listening)
-        XCTAssertNil(flow.pendingRewrite,
-            "Starting a new Voice Turn during confirming must clear the pending Rewrite")
-        XCTAssertFalse(directives.contains(where: {
-            if case .deliverRewrite = $0 { return true }
-            return false
-        }), "Starting a new turn must not deliver the stale pending Rewrite")
+        XCTAssertTrue(directives.contains(.setState(.listening)))
         XCTAssertTrue(directives.contains(.startCapture))
     }
 
-    // MARK: - Transport error during confirming → no delivery
+    // MARK: - .userAffirmed delivers whenever pending Rewrite is set
+
+    func testUserAffirmedDeliversFromConfirmingState() {
+        var flow = flowInConfirming(rewrite: "Confirmed text.")
+        // Get to the confirm-capture turn and then receive userAffirmed
+        // (model calls deliver_prompt → controller maps to .userAffirmed)
+        let directives = flow.handle(.userAffirmed)
+        XCTAssertTrue(directives.contains(.deliverRewrite("Confirmed text.")),
+            ".userAffirmed must emit deliverRewrite when pending Rewrite is set")
+        XCTAssertNil(flow.pendingRewrite,
+            "pendingRewrite must be cleared after delivery")
+    }
+
+    func testUserAffirmedDeliversFromListeningStateIfPendingRewriteSet() {
+        // Scenario: user presses hotkey (confirming → listening, preserving pending),
+        // speaks affirmation, then flow enters thinking → model calls deliver_prompt
+        // → controller fires .userAffirmed while flow is in .thinking state.
+        var flow = flowInConfirming(rewrite: "Rewrite that survived the turn.")
+        // Press hotkey: confirming → listening (pending preserved)
+        _ = flow.handle(.hotkeyStartListening)
+        XCTAssertEqual(flow.state, .listening)
+        XCTAssertEqual(flow.pendingRewrite, "Rewrite that survived the turn.")
+        // Stop listening: → thinking
+        _ = flow.handle(.hotkeyStopListening)
+        XCTAssertEqual(flow.state, .thinking)
+        // Now the model hears affirmation and calls deliver_prompt
+        let directives = flow.handle(.userAffirmed)
+        XCTAssertTrue(directives.contains(.deliverRewrite("Rewrite that survived the turn.")),
+            ".userAffirmed must deliver whenever pending Rewrite is set (not only in .confirming)")
+        XCTAssertNil(flow.pendingRewrite)
+    }
+
+    func testUserAffirmedDeliversFromSpeakingStateIfPendingRewriteSet() {
+        var flow = flowInConfirming(rewrite: "Speaking-state delivery.")
+        _ = flow.handle(.hotkeyStartListening)  // → listening (pending preserved)
+        _ = flow.handle(.hotkeyStopListening)   // → thinking
+        _ = flow.handle(.audioDelta("BBB="))    // → speaking
+        XCTAssertEqual(flow.state, .speaking)
+        XCTAssertEqual(flow.pendingRewrite, "Speaking-state delivery.")
+        let directives = flow.handle(.userAffirmed)
+        XCTAssertTrue(directives.contains(.deliverRewrite("Speaking-state delivery.")))
+        XCTAssertNil(flow.pendingRewrite)
+    }
+
+    func testUserAffirmedWithNoPendingRewriteIsNoOp() {
+        var flow = VoiceTurnFlow()
+        // No pending Rewrite — userAffirmed should be a no-op (or return minimal directives, no deliverRewrite)
+        let directives = flow.handle(.userAffirmed)
+        XCTAssertFalse(directives.contains(where: {
+            if case .deliverRewrite = $0 { return true }
+            return false
+        }), ".userAffirmed with no pending Rewrite must not emit deliverRewrite")
+    }
+
+    // MARK: - Delivery is exactly once
+
+    func testDeliveryIsExactlyOnce() {
+        var flow = flowInConfirming(rewrite: "Deliver once.")
+        _ = flow.handle(.userAffirmed)
+        // pending is now nil; a second userAffirmed must not deliver
+        let directives = flow.handle(.userAffirmed)
+        XCTAssertFalse(directives.contains(where: {
+            if case .deliverRewrite = $0 { return true }
+            return false
+        }), "A second .userAffirmed after delivery must not deliver again")
+    }
+
+    // MARK: - New compose while pending overwrites
+
+    func testNewConfirmationProducedOverwritesPendingRewrite() {
+        var flow = flowInConfirming(rewrite: "Old rewrite.")
+        // New confirmationProduced while in confirming → overwrites
+        let directives = flow.handle(.confirmationProduced(pendingRewrite: "New rewrite."))
+        XCTAssertEqual(flow.pendingRewrite, "New rewrite.",
+            "A new confirmationProduced must overwrite the existing pending Rewrite")
+        XCTAssertFalse(directives.contains(.deliverRewrite("Old rewrite.")),
+            "Overwriting must not deliver the old Rewrite")
+    }
+
+    func testNewConfirmationProducedFromThinkingOverwritesPendingRewrite() {
+        // Enter confirming, then start a new turn (confirming → listening → thinking)
+        // then model produces a new confirmationProduced
+        var flow = flowInConfirming(rewrite: "First rewrite.")
+        _ = flow.handle(.hotkeyStartListening)  // preserves pending
+        _ = flow.handle(.hotkeyStopListening)   // → thinking
+        XCTAssertEqual(flow.pendingRewrite, "First rewrite.")
+        let directives = flow.handle(.confirmationProduced(pendingRewrite: "Second rewrite."))
+        XCTAssertEqual(flow.pendingRewrite, "Second rewrite.")
+        XCTAssertFalse(directives.contains(.deliverRewrite("First rewrite.")))
+    }
+
+    // MARK: - Confirm-capture turn with no tool call → decline-by-omission
+
+    func testResponseDoneDuringListeningAfterConfirmingDiscardsIfNoPendingDelivery() {
+        // After confirming → listening → thinking → responseDone (no deliver_prompt)
+        // the pending Rewrite is discarded (decline-by-omission).
+        var flow = flowInConfirming(rewrite: "Should be discarded.")
+        _ = flow.handle(.hotkeyStartListening)  // → listening (pending preserved)
+        _ = flow.handle(.hotkeyStopListening)   // → thinking
+        _ = flow.handle(.responseDone)          // confirm turn ends with no tool call → discard
+        XCTAssertNil(flow.pendingRewrite,
+            "A confirm-capture turn with no tool call must discard the pending Rewrite")
+        XCTAssertEqual(flow.state, .idle)
+    }
+
+    func testResponseDoneDuringSpeakingAfterConfirmingDiscardsIfNoPendingDelivery() {
+        var flow = flowInConfirming(rewrite: "Also discarded.")
+        _ = flow.handle(.hotkeyStartListening)  // → listening (pending preserved)
+        _ = flow.handle(.hotkeyStopListening)   // → thinking
+        _ = flow.handle(.audioDelta("CCC="))    // → speaking
+        _ = flow.handle(.responseDone)          // model spoke but no deliver_prompt
+        XCTAssertNil(flow.pendingRewrite,
+            "Response done after confirm-capture audio (no deliver_prompt) must discard pending")
+        XCTAssertEqual(flow.state, .idle)
+    }
+
+    // MARK: - Transport / server error → no delivery
 
     func testTransportErrorDuringConfirmingDoesNotDeliver() {
         var flow = flowInConfirming()
@@ -110,11 +201,22 @@ final class VoiceTurnFlowConfirmingTests: XCTestCase {
         XCTAssertFalse(directives.contains(where: {
             if case .deliverRewrite = $0 { return true }
             return false
-        }), "Transport error during confirmation must not deliver")
+        }), "Transport error must not deliver")
         XCTAssertTrue(directives.contains(where: {
             if case .showError = $0 { return true }
             return false
         }))
+    }
+
+    func testTransportErrorWhileListeningWithPendingRewriteDoesNotDeliver() {
+        var flow = flowInConfirming(rewrite: "Should not be delivered.")
+        _ = flow.handle(.hotkeyStartListening)  // → listening (pending preserved)
+        let directives = flow.handle(.transportError("connection lost"))
+        XCTAssertNil(flow.pendingRewrite)
+        XCTAssertFalse(directives.contains(where: {
+            if case .deliverRewrite = $0 { return true }
+            return false
+        }), "Transport error while listening with pending Rewrite must not deliver")
     }
 
     func testResponseErrorDuringConfirmingDoesNotDeliver() {
@@ -125,7 +227,20 @@ final class VoiceTurnFlowConfirmingTests: XCTestCase {
         XCTAssertFalse(directives.contains(where: {
             if case .deliverRewrite = $0 { return true }
             return false
-        }), "Response error during confirmation must not deliver")
+        }), "Response error must not deliver")
+    }
+
+    // MARK: - userDeclined still clears (for explicit decline path)
+
+    func testUserDeclinedClearsPendingRewriteWithoutDelivering() {
+        var flow = flowInConfirming(rewrite: "Declined rewrite.")
+        let directives = flow.handle(.userDeclined)
+        XCTAssertEqual(flow.state, .idle)
+        XCTAssertNil(flow.pendingRewrite)
+        XCTAssertFalse(directives.contains(where: {
+            if case .deliverRewrite = $0 { return true }
+            return false
+        }), "Decline must not emit deliverRewrite")
     }
 
     // MARK: - AppState confirming mappings
