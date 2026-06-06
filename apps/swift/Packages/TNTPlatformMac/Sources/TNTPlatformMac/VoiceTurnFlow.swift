@@ -10,11 +10,19 @@
 // replayable in unit tests without instantiating an `AVAudioEngine`,
 // a `URLSessionWebSocketTask`, or any AppKit window.
 //
-// M1 addition (issue #46): a `confirming` state holds a pending Rewrite
-// between TNT speaking "…confirm?" and the User answering. Delivery is
-// exactly once: only an explicit `userAffirmed` event in the `confirming`
-// state emits `deliverRewrite`; any other transition clears the pending
-// Rewrite without delivering it.
+// M1 (issue #82): confirm-channel rewrite — hold-hotkey-to-confirm,
+// pendingRewrite decoupled from AppState:
+//
+// - In `.confirming`, a hotkey press PRESERVES pendingRewrite and starts
+//   capture. The model then hears the user's affirmation or decline.
+// - `.userAffirmed` delivers the pending Rewrite whenever one is set
+//   (not only while `.confirming`) — the model calls deliver_prompt on a
+//   heard affirmation, which may arrive in .thinking/.speaking state.
+// - A new `compose`/.confirmationProduced while a Rewrite is pending
+//   OVERWRITES it (re-confirm the new prompt).
+// - A confirm-capture turn that produces no tool call discards the pending
+//   Rewrite on `response.done` (decline-by-omission).
+// - VAD stays off (turn_detection: null is a fixed v0 invariant per ADR).
 
 import Foundation
 
@@ -37,18 +45,19 @@ public enum VoiceTurnFlowEvent: Sendable, Equatable {
     // MARK: - M1 confirmation events
 
     /// The Cognitive Engine produced a cleaned Rewrite and the model
-    /// has spoken it back asking for confirmation. The flow moves into
-    /// `.confirming`, holding the pending Rewrite until the User affirms
-    /// or declines.
+    /// has spoken it back asking for confirmation. The pending Rewrite
+    /// is stored (or overwritten if already set). The flow moves into
+    /// `.confirming`.
     case confirmationProduced(pendingRewrite: String)
 
     /// The User affirmed the pending Rewrite ("yes" / "对" / "好" etc —
     /// bilingual detection is the Realtime model's responsibility, not
-    /// the flow's). Triggers exactly-once delivery.
+    /// the flow's). Triggers exactly-once delivery when a pending Rewrite
+    /// is set, regardless of which AppState the flow is currently in.
     case userAffirmed
 
-    /// The User declined the pending Rewrite ("no" / "cancel" etc).
-    /// The pending Rewrite is discarded without delivery.
+    /// The User explicitly declined the pending Rewrite ("no" / "cancel"
+    /// etc). The pending Rewrite is discarded without delivery.
     case userDeclined
 }
 
@@ -71,8 +80,9 @@ public enum VoiceTurnDirective: Sendable, Equatable {
 
     /// Deliver the pending Rewrite exactly once: write it to the
     /// pasteboard / send it to the target Worker Agent. The Controller
-    /// must only act on this directive once; subsequent `userAffirmed`
-    /// events in a non-confirming state are no-ops (see the flow logic).
+    /// must only act on this directive once; the flow clears pendingRewrite
+    /// immediately after emitting this directive so subsequent userAffirmed
+    /// events with no pending Rewrite are no-ops.
     case deliverRewrite(String)
 }
 
@@ -80,9 +90,11 @@ public struct VoiceTurnFlow: Sendable, Equatable {
 
     public private(set) var state: AppState
 
-    /// The pending Rewrite text held during `.confirming`. Set when
-    /// `confirmationProduced` fires; cleared on any transition out of
-    /// `.confirming`, whether affirmed or not.
+    /// The pending Rewrite text. Set when `confirmationProduced` fires;
+    /// cleared on delivery, explicit decline, or any error/transport failure.
+    /// Decoupled from AppState: persists across .confirming → .listening → .thinking
+    /// so the user can hold the hotkey to speak their affirmation and still have
+    /// the Rewrite available when the model calls deliver_prompt.
     public private(set) var pendingRewrite: String?
 
     public init(state: AppState = .idle) {
@@ -121,8 +133,11 @@ public struct VoiceTurnFlow: Sendable, Equatable {
         case (.speaking, .audioDelta(let payload)):
             return [.enqueuePlayback(payload)]
 
+        // response.done from thinking/speaking when there is a pending Rewrite
+        // and no tool call arrived → decline-by-omission (discard the Rewrite).
         case (.thinking, .responseDone),
              (.speaking, .responseDone):
+            pendingRewrite = nil
             state = .idle
             return [.setState(.idle)]
 
@@ -140,36 +155,45 @@ public struct VoiceTurnFlow: Sendable, Equatable {
 
         // MARK: M1: Confirmation flow
 
-        /// The model produced a Rewrite and spoke it; move to confirming.
+        /// The model produced a Rewrite and spoke it (or is speaking it).
+        /// Store or overwrite the pending Rewrite; move to .confirming.
         case (.speaking, .confirmationProduced(let rewrite)),
-             (.thinking, .confirmationProduced(let rewrite)):
+             (.thinking, .confirmationProduced(let rewrite)),
+             (.confirming, .confirmationProduced(let rewrite)):
             state = .confirming
             pendingRewrite = rewrite
             return [.setState(.confirming)]
 
-        /// User affirmed — deliver exactly once and return to idle.
-        case (.confirming, .userAffirmed):
+        /// In .confirming, hotkey press PRESERVES the pending Rewrite and
+        /// starts capture. The model hears the affirmation / decline speech.
+        case (.confirming, .hotkeyStartListening):
+            state = .listening
+            // pendingRewrite intentionally NOT cleared — preserved for delivery.
+            return [.setState(.listening), .startCapture]
+
+        /// .userAffirmed delivers the pending Rewrite whenever one is set.
+        /// Works in any state because the model may call deliver_prompt while
+        /// the flow is .thinking or .speaking (the confirm-capture response
+        /// is still in flight when the tool call arrives).
+        case (_, .userAffirmed):
             guard let rewrite = pendingRewrite else {
-                // Defensive: pendingRewrite should always be set when confirming.
-                state = .idle
-                return [.setState(.idle)]
+                // No pending Rewrite — no-op.
+                return []
             }
+            let previous = state
             state = .idle
             pendingRewrite = nil
-            return [.deliverRewrite(rewrite), .setState(.idle)]
+            var directives: [VoiceTurnDirective] = [.deliverRewrite(rewrite)]
+            if previous != .idle {
+                directives.append(.setState(.idle))
+            }
+            return directives
 
-        /// User declined — discard without delivery.
+        /// User explicitly declined — discard without delivery.
         case (.confirming, .userDeclined):
             state = .idle
             pendingRewrite = nil
             return [.setState(.idle)]
-
-        /// New Voice Turn started while confirming — supersede the pending
-        /// Rewrite without delivering it (no carry-over "yes" on a stale prompt).
-        case (.confirming, .hotkeyStartListening):
-            state = .listening
-            pendingRewrite = nil
-            return [.setState(.listening), .startCapture]
 
         // MARK: Errors — server-side or transport — recover to idle
 
