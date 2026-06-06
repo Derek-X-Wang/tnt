@@ -43,18 +43,50 @@ final class VoiceTurnController {
     /// responds to stale context. Reset at each capture start.
     private var framesThisTurn = 0
 
+    /// True while a compose tool-call round-trip is in flight — from dispatch
+    /// until the spoken-confirm `response.done` fires `.confirmationProduced`.
+    /// While true, `response.done` is routed to the orchestrator, not the flow,
+    /// so the earlier function-call `response.done` doesn't reset the turn.
+    private var composeInFlight = false
+
+    /// Serialized outbound tail: each `serialSend` awaits the previous so
+    /// ordering holds (a `function_call_output` MUST precede its `response.create`).
+    private var outboundTail: Task<Void, Never>?
+
     private weak var menuBarHost: MenuBarHost?
     private let apiKeyProvider: () throws -> String
     private let voice: String
 
+    /// Injected Cognitive Engine compose closure. The concrete `LocalOpenAIEngine`
+    /// is constructed only at the composition root (TNTMacApp), per ADR-0003; that
+    /// closure also re-reads the BYOK key per call so a replaced key takes effect.
+    private let composeFunc: (AgentRef, String, String, CaptureSet) async throws -> String
+
+    /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
+    /// send/event hooks can reference `self` after init completes.
+    private lazy var composeOrchestrator = ComposeOrchestrator(
+        compose: composeFunc,
+        sendFunctionCallOutput: { [weak self] callId, output in
+            self?.serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: output))
+        },
+        sendResponseCreate: { [weak self] in
+            self?.serialSend(ResponseCreate())
+        },
+        onEvent: { [weak self] event in
+            Task { @MainActor in self?.handleOrchestratorEvent(event) }
+        }
+    )
+
     init(
         menuBarHost: MenuBarHost,
         apiKeyProvider: @escaping () throws -> String,
-        voice: String = "marin"
+        voice: String = "marin",
+        compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
         self.voice = voice
+        self.composeFunc = compose
         self.audio = RealtimeAudioSession()
     }
 
@@ -80,6 +112,10 @@ final class VoiceTurnController {
             TNTLog.voice.error("startListening: no client after ensureConnection — aborting (see prior error)")
             return
         }
+        // New Voice Turn: advance the orchestrator's turn-generation token so any
+        // in-flight compose for the previous turn is dropped on completion.
+        composeOrchestrator.advanceTurnToken()
+        composeInFlight = false
         apply(flow.handle(.hotkeyStartListening))
     }
 
@@ -102,6 +138,7 @@ final class VoiceTurnController {
     func tearDown() async {
         captureDrainTask?.cancel()
         inboundTask?.cancel()
+        outboundTail?.cancel()
         captureDrainTask = nil
         inboundTask = nil
         audio.stop()
@@ -149,7 +186,11 @@ final class VoiceTurnController {
         // voice + system prompt aligned. Routed through sendQueue so
         // the session.update is serialized with all subsequent sends.
         do {
-            try await c.sendQueue.send(SessionUpdate.bilingualV0(voice: voice))
+            // Register the M1 Rewrite tools on every connect so the model can
+            // call compose_agent_prompt / deliver_prompt. withRewriteTools()
+            // returns a Body, so re-wrap it in a SessionUpdate.
+            let body = SessionUpdate.bilingualV0(voice: voice).session.withRewriteTools()
+            try await c.sendQueue.send(SessionUpdate(session: body))
         } catch {
             menuBarHost?.setLastErrorMessage("Could not configure session: \(error.localizedDescription)")
         }
@@ -211,26 +252,79 @@ final class VoiceTurnController {
         switch event {
         case .responseAudioDelta(let delta):
             apply(flow.handle(.audioDelta(delta.delta)))
-        case .responseDone:
-            TNTLog.voice.info("serverEvent: response.done")
-            apply(flow.handle(.responseDone))
+        case .responseDone(let done):
+            if composeInFlight {
+                // Consumed by the orchestrator: it fires .confirmationProduced on
+                // the spoken-confirm response.done. Routing to the flow here would
+                // prematurely reset the turn on the earlier function-call done.
+                composeOrchestrator.handleResponseDone(responseId: done.responseId, status: done.status)
+            } else {
+                TNTLog.voice.info("serverEvent: response.done")
+                apply(flow.handle(.responseDone))
+            }
         case .error(let err):
             let summary = err.error.message ?? err.error.code ?? "Realtime error"
             TNTLog.voice.error("serverEvent: error — \(summary, privacy: .public)")
+            composeInFlight = false
             apply(flow.handle(.responseError(summary)))
             // Drop the dead client so the next hotkey press reconnects.
             self.client = nil
         case .sessionCreated:
             TNTLog.voice.info("serverEvent: session.created")
             return
-        case .functionCallArgumentsDone(let callId, let name, _):
-            // Tool-call dispatch wired in M1/M4/M5. The codec now delivers
-            // the call here; the handler stub prevents compiler exhaustiveness
-            // errors and lets future tool wiring plug in without a protocol change.
-            TNTLog.voice.info("serverEvent: function_call_arguments.done — name=\(name, privacy: .public) callId=\(callId, privacy: .public) (tool wiring pending M1)")
-            return
+        case .functionCallArgumentsDone(let callId, let name, let argumentsJSON):
+            handleToolCall(callId: callId, name: name, argumentsJSON: argumentsJSON)
         case .unknown:
             return
+        }
+    }
+
+    // MARK: - Tool-call dispatch (M1)
+
+    /// Dispatch a Realtime function-call to the compose/deliver path. Decoding
+    /// and policy live in the pure, tested TNTPlatformMac cores (ToolCallDispatch
+    /// #78, ComposeOrchestrator #79); this is the thin app-target glue that
+    /// injects the real network (compose) and send hooks.
+    private func handleToolCall(callId: String, name: String, argumentsJSON: String) {
+        let decision = classifyToolCall(name: name, argumentsJSON: argumentsJSON)
+        switch decision {
+        case .compose:
+            TNTLog.voice.info("toolCall: compose_agent_prompt — dispatching to Cognitive Engine")
+            composeInFlight = true
+            Task { @MainActor in
+                // CaptureSet is a stub here (#50); live capture lands in #49/#52.
+                await self.composeOrchestrator.handleDecision(decision, callId: callId, capture: .empty)
+            }
+        case .deliver:
+            // Delivery is wired in #51. Ack the call so the Realtime turn does
+            // not hang waiting for a function_call_output.
+            TNTLog.voice.info("toolCall: deliver_prompt — ack only (delivery pending #51)")
+            serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: "ok"))
+            serialSend(ResponseCreate())
+        case .ignore:
+            TNTLog.voice.info("toolCall: \(name, privacy: .public) ignored (unknown tool or undecodable args)")
+        }
+    }
+
+    /// Apply an event emitted by the compose orchestrator to the flow.
+    private func handleOrchestratorEvent(_ event: ComposeOrchestratorEvent) {
+        switch event {
+        case .confirmationProduced(let rewrite):
+            composeInFlight = false
+            TNTLog.voice.info("orchestrator: confirmationProduced — entering confirming state")
+            apply(flow.handle(.confirmationProduced(pendingRewrite: rewrite)))
+        }
+    }
+
+    /// Serialized outbound send. Each call awaits the previous so the order the
+    /// orchestrator emits hooks in is preserved on the wire — a
+    /// `function_call_output` is always sent before its `response.create`.
+    private func serialSend<E: Encodable & Sendable>(_ event: E) {
+        let queue = self.sendQueue
+        let prev = outboundTail
+        outboundTail = Task { @MainActor in
+            await prev?.value
+            try? await queue?.send(event)
         }
     }
 
