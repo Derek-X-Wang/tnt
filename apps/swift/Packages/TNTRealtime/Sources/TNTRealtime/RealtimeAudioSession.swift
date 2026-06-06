@@ -1,13 +1,24 @@
-// RealtimeAudioSession — the single full-duplex audio path for a Voice
-// Turn. Owns ONE `AVAudioEngine` that does both mic capture and speaker
-// playback, with VoiceProcessingIO enabled on the input node for built-in
-// echo cancellation + AGC (ADR-0002).
+// RealtimeAudioSession — the single audio path for a Voice Turn. Owns ONE
+// `AVAudioEngine` that does both mic capture (plain HAL input) and speaker
+// playback (`AVAudioPlayerNode` → mixer → output).
 //
-// Why one engine: VoiceProcessingIO is a single *full-duplex* AudioUnit —
-// it owns the mic AND the speaker because it needs the render (output)
-// signal as the echo reference. Two independent engines fight over the
-// audio HAL and produce -10875 / KeystrokeSuppressor / HALC-overload
-// failures and no audio.
+// Why no VoiceProcessingIO (ADR-0002 amendment, 2026-06, issue #73):
+// VPIO gives hardware echo cancellation + AGC, but as a system "voice chat"
+// unit it DUCKS all other audio system-wide for the entire time the engine
+// is alive — measured on hardware: with VPIO the user's YouTube/Music went
+// SILENT; with plain HAL it stays full volume. TNT's Voice Turn is sequential
+// (listen → think → speak), so the mic is not open while the reply plays;
+// hardware echo cancellation only mattered for barge-in on OPEN speakers, a
+// narrow case the Realtime server-side VAD tolerates. Dropping VPIO is the
+// right trade: never silence the user's media, at the cost of AEC on that one
+// path. (It does NOT change the ~1.7s first-press-after-idle cold start —
+// that is mic-hardware wake, which plain HAL pays too; see #73.)
+//
+// Why one engine is still fine: a single PLAIN engine does simultaneous
+// capture + playback without issue (measured: capture frames + playback tone
+// at once, no -10875). The two-engines-fight-the-HAL failure (-10875 /
+// KeystrokeSuppressor / HALC-overload) was specific to two *VPIO* full-duplex
+// units; one plain engine is safe.
 //
 // Two distinct formats, deliberately NOT shared:
 //   * captureFormat  = PCM16 24 kHz mono — what the OpenAI Realtime API
@@ -90,17 +101,19 @@ public final class RealtimeAudioSession: @unchecked Sendable {
 
     // MARK: - Engine lifecycle
 
-    /// Lazily configure + start the shared engine. Enables VPIO on the
-    /// input node (best-effort: if the machine has no usable input device
-    /// we continue without echo cancellation rather than failing the whole
-    /// Voice Turn), attaches the player to the mixer in the Float32 format
-    /// the mixer accepts, and starts playback.
+    /// Lazily configure + start the shared engine. Uses a PLAIN HAL input
+    /// node (NO VoiceProcessingIO — see the "Why no VPIO" note at the top of
+    /// this file and ADR-0002's 2026-06 amendment), attaches the player to
+    /// the mixer in the Float32 format the mixer accepts, and starts playback.
+    ///
+    /// One plain engine does both mic capture and speaker playback
+    /// simultaneously — measured working on hardware (capture + playback at
+    /// once, no -10875). The two-engines-fight-the-HAL failure mode is
+    /// specific to two *VPIO* full-duplex units; a single plain engine is fine.
     private func ensureEngineStarted() throws {
         if lock.withLock({ engineStarted }) { return }
         // New activity cancels any pending drain-stop request.
         lock.withLock { stopWhenDrained = false }
-
-        let input = engine.inputNode
 
         // Attach the player + connect it to the mixer exactly once, ever.
         // `stop()` (between turns) stops processing but keeps the graph, so
@@ -111,24 +124,28 @@ public final class RealtimeAudioSession: @unchecked Sendable {
             engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
         }
 
-        // Try with VoiceProcessingIO (echo cancellation + AGC) first.
-        // VPIO is a full-duplex AudioUnit and on some Macs makes
-        // `engine.start()` fail with -10875 (FormatNotSupported) when the
-        // hardware I/O format doesn't line up. If that happens, fall back
-        // to a plain engine without voice processing — losing echo
-        // cancellation but keeping working audio (ADR-0002 prefers VPIO
-        // but does not require it).
-        try? input.setVoiceProcessingEnabled(true)
-        do {
-            try engine.start()
-            audioLog.info("engine started with VoiceProcessingIO")
-        } catch {
-            audioLog.error("engine.start with VPIO failed (\(error.localizedDescription, privacy: .public)) — retrying without voice processing")
-            engine.stop()
-            try? input.setVoiceProcessingEnabled(false)
-            try engine.start()
-            audioLog.info("engine started without VoiceProcessingIO (no echo cancellation)")
-        }
+        // Reference the input node BEFORE start(). This is load-bearing:
+        // AVAudioEngine only opens the hardware INPUT device if the input
+        // node has been realized before `start()`; otherwise it starts
+        // output-only and the mic never opens (capture yields 0 frames, no
+        // mic indicator). The old code touched the input node via
+        // `setVoiceProcessingEnabled` here, which incidentally realized it —
+        // dropping VPIO removed that side effect, so we realize it explicitly.
+        // (Reproduced + verified on hardware: no input-node ref before start
+        // → 0 frames; with this ref → frames flow. Issue #73.)
+        _ = engine.inputNode
+
+        // Plain HAL capture — no VoiceProcessingIO. VPIO's system-wide
+        // ducking silenced the user's other audio (YouTube/Music) for the
+        // whole time the engine was alive (measured: VPIO default = other
+        // audio SILENT; plain HAL = full volume). For TNT's sequential
+        // listen→speak Voice Turn the mic is not open while the reply plays,
+        // so hardware echo cancellation buys nothing on the common path; the
+        // only case it helped was barge-in on OPEN speakers, a narrow
+        // scenario the Realtime server-side VAD tolerates. See ADR-0002
+        // amendment (2026-06) + issue #73.
+        try engine.start()
+        audioLog.info("engine started (plain HAL capture, no voice processing)")
         player.play()
 
         lock.withLock { engineStarted = true }
@@ -276,8 +293,8 @@ public final class RealtimeAudioSession: @unchecked Sendable {
 
     // MARK: - Teardown
 
-    /// Full teardown: remove the tap, stop the player, stop the engine,
-    /// disable VPIO. The session can be started again afterwards.
+    /// Full teardown: remove the tap, stop the player, stop the engine.
+    /// The session can be started again afterwards.
     public func stop() {
         let wasStarted: Bool = lock.withLock {
             let was = engineStarted
@@ -293,7 +310,6 @@ public final class RealtimeAudioSession: @unchecked Sendable {
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
-        try? engine.inputNode.setVoiceProcessingEnabled(false)
         converter = nil
     }
 

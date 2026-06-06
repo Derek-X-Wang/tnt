@@ -2,8 +2,7 @@
 //
 // Used by the menu-bar VU indicator to show the User that the mic is
 // actually picking up their voice (per the M0/S6 acceptance demo: the
-// indicator should peak much higher on speech than on background music
-// thanks to `VoiceProcessingIO`'s built-in echo cancellation).
+// indicator should peak much higher on speech than on silence).
 
 import Foundation
 
