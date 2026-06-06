@@ -153,6 +153,34 @@ public final class RealtimeAudioSession: @unchecked Sendable {
         lock.withLock { engineStarted = true }
     }
 
+    // MARK: - Pre-warm
+
+    /// Pay the one-time audio-device cold-open cost AT LAUNCH instead of on
+    /// the user's first Voice Turn. Starts the engine (the slow ~1.5s
+    /// first-ever device open) then immediately pauses it via `pauseForIdle`,
+    /// leaving the device warm with the mic indicator cleared. The user's
+    /// first hotkey press then resumes warm (~tens of ms) instead of paying
+    /// the cold open mid-turn.
+    ///
+    /// Call OFF the main actor (the start blocks ~1.5s). No-op if already
+    /// started/warm. Only meaningful when mic permission is already granted —
+    /// the caller is responsible for that check so a first-ever launch does
+    /// not trigger the TCC prompt out of onboarding context. Briefly lights
+    /// the mic indicator at launch (the documented trade for an instant
+    /// first turn; see issue #73).
+    public func prewarm() {
+        do {
+            try ensureEngineStarted()
+        } catch {
+            audioLog.error("prewarm: engine start failed (\(error.localizedDescription, privacy: .public)) — first turn will pay cold open")
+            return
+        }
+        // Immediately release for idle: clears the mic indicator + frees other
+        // audio, but keeps the device warm for a fast first-turn resume.
+        pauseForIdle()
+        audioLog.info("prewarm: device warmed + paused (first turn will resume warm)")
+    }
+
     // MARK: - Capture (mic → frames)
 
     /// Begin forwarding mic audio as PCM16 `frames`. Idempotent. Starts

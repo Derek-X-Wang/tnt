@@ -30,6 +30,13 @@ public final class PermissionRequester {
         }
     }
 
+    /// Non-prompting check: is microphone access ALREADY granted? Used by the
+    /// launch mic pre-warm (issue #73) so warming only happens when the user
+    /// has already consented — never triggering the TCC prompt out of context.
+    public nonisolated func isMicrophoneGranted() -> Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
     public func requestInputMonitoring() async -> Bool {
         // CGRequestListenEventAccess is synchronous but blocking on the
         // main actor briefly is fine — the prompt itself is an OS-owned
