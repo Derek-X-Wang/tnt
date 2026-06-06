@@ -116,9 +116,11 @@ public final class RealtimeAudioSession: @unchecked Sendable {
         lock.withLock { stopWhenDrained = false }
 
         // Attach the player + connect it to the mixer exactly once, ever.
-        // `stop()` (between turns) stops processing but keeps the graph, so
-        // on a lazy restart the node is still attached+connected — and
-        // re-attaching an already-attached node is a fatal programmer error.
+        // Between turns the engine is PAUSED (`pauseForIdle`), not stopped, so
+        // the graph + node stay intact and `engine.start()` below resumes warm.
+        // Even after a full `stop()` the graph survives, so on any lazy restart
+        // the node is still attached+connected — and re-attaching an
+        // already-attached node is a fatal programmer error.
         if player.engine == nil {
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
@@ -241,7 +243,7 @@ public final class RealtimeAudioSession: @unchecked Sendable {
         lock.withLock { outstandingPlaybackBuffers += 1 }
         player.scheduleBuffer(buffer) { [weak self] in
             guard let self else { return }
-            let shouldStop: Bool = self.lock.withLock {
+            let shouldPause: Bool = self.lock.withLock {
                 self.outstandingPlaybackBuffers -= 1
                 return self.stopWhenDrained
                     && self.outstandingPlaybackBuffers == 0
@@ -249,24 +251,49 @@ public final class RealtimeAudioSession: @unchecked Sendable {
             }
             // Completion fires on a CoreAudio thread; engine teardown must
             // hop to the main queue.
-            if shouldStop {
-                DispatchQueue.main.async { self.stop() }
+            if shouldPause {
+                DispatchQueue.main.async { self.pauseForIdle() }
             }
         }
     }
 
-    /// Release the engine (and the mic) once the reply audio finishes
-    /// playing and capture is off. Stops immediately if nothing is
-    /// pending. Called when a Voice Turn returns to idle so the macOS
-    /// mic-in-use indicator clears between turns instead of staying lit
-    /// by the warm VPIO input. The next turn lazily restarts the engine.
+    /// Release the mic between Voice Turns once the reply audio finishes
+    /// playing and capture is off — PAUSING (not fully stopping) the engine.
+    /// Called when a Voice Turn returns to idle. Pausing clears the macOS
+    /// mic-in-use indicator (verified: orange dot off) and frees other-app
+    /// audio, BUT keeps the audio device warm so the next turn's
+    /// `engine.start()` resumes in ~tens of ms instead of paying the ~1.7s
+    /// cold device-open (measured: 70-270ms warm vs 1700ms cold; issue #73).
+    /// Full release (`stop()`) is reserved for app teardown.
     public func requestStopWhenDrained() {
-        let stopNow: Bool = lock.withLock {
+        let pauseNow: Bool = lock.withLock {
             guard engineStarted else { return false }
             stopWhenDrained = true
             return outstandingPlaybackBuffers == 0 && !capturing
         }
-        if stopNow { stop() }
+        if pauseNow { pauseForIdle() }
+    }
+
+    /// Pause the engine between turns: remove the tap, stop the player, and
+    /// `engine.pause()` (NOT `stop()`). Keeps the device warm for a fast
+    /// next-turn resume while clearing the mic indicator. `ensureEngineStarted`
+    /// resumes a paused engine via `engine.start()` (warm). Idempotent.
+    private func pauseForIdle() {
+        let wasStarted: Bool = lock.withLock {
+            let was = engineStarted
+            engineStarted = false
+            capturing = false
+            stopWhenDrained = false
+            outstandingPlaybackBuffers = 0
+            pendingBytes.removeAll(keepingCapacity: true)
+            return was
+        }
+        guard wasStarted else { return }
+
+        engine.inputNode.removeTap(onBus: 0)
+        player.stop()
+        engine.pause()
+        converter = nil
     }
 
     /// Decode a base64 chunk straight from the WS event into the playback
