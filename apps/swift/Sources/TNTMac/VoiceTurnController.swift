@@ -335,11 +335,18 @@ final class VoiceTurnController {
             switch directive {
             case .setState(let state):
                 menuBarHost?.setState(state)
-                if state == .idle {
+                // Release the mic (pause, stay warm) on any non-capturing resting
+                // state so the macOS mic indicator clears. `.idle` between turns,
+                // and `.confirming` — a resting state holding the pending Rewrite
+                // where the tap is already removed but the device would otherwise
+                // stay open (dot lit) until the user holds to affirm. The next
+                // hold resumes warm (~120ms), so dropping the device here is free.
+                switch state {
+                case .idle, .confirming:
                     menuBarHost?.setMicLevel(nil)
-                    // Release the mic once the reply finishes playing, so
-                    // the macOS mic-in-use indicator clears between turns.
                     audio.requestStopWhenDrained()
+                default:
+                    break
                 }
             case .startCapture:
                 framesThisTurn = 0
