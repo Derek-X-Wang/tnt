@@ -20,6 +20,7 @@
 		D1DCF28F6AC957CE568B6B95 /* TNTCognitive in Frameworks */ = {isa = PBXBuildFile; productRef = 25F2EBAB140B44EF1580C4E5 /* TNTCognitive */; };
 		D4BA5ADCCBCB63A76272877D /* TNTMemory in Frameworks */ = {isa = PBXBuildFile; productRef = 0D964440E8884A31BF6F8C31 /* TNTMemory */; };
 		DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660DF72B029FB394DA3E4F03 /* VoiceTurnController.swift */; };
+		E7E3A57D3F14583D77D22B6D /* DeliverySinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0CA59F8351A9F6101EE6CA1 /* DeliverySinks.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +39,7 @@
 		B5A47DC14F6D6ED270602D4D /* TNTMemory */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTMemory; path = Packages/TNTMemory; sourceTree = SOURCE_ROOT; };
 		BE0F253A662E18A4435646AD /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		D263E959A4BD55F0C0864C50 /* TNTIngest */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TNTIngest; path = Packages/TNTIngest; sourceTree = SOURCE_ROOT; };
+		F0CA59F8351A9F6101EE6CA1 /* DeliverySinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliverySinks.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,6 +129,7 @@
 		C5282A561B0FD7FD9CA325E8 /* TNTMac */ = {
 			isa = PBXGroup;
 			children = (
+				F0CA59F8351A9F6101EE6CA1 /* DeliverySinks.swift */,
 				91C9F7D283B3AAA63D274347 /* SparkleMenuAction.swift */,
 				A2A223649CAA4049EA5C77B9 /* TNTMac.entitlements */,
 				726D3A00C25680F5A209768C /* TNTMacApp.swift */,
@@ -273,6 +276,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E7E3A57D3F14583D77D22B6D /* DeliverySinks.swift in Sources */,
 				BBEC07E04431B47841B12C47 /* SparkleMenuAction.swift in Sources */,
 				8594CBCA22E5BA98F74061AE /* TNTMacApp.swift in Sources */,
 				DEAFB049E39F95866322F238 /* VoiceTurnController.swift in Sources */,

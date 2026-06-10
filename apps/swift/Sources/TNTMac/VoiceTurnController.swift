@@ -62,6 +62,10 @@ final class VoiceTurnController {
     /// closure also re-reads the BYOK key per call so a replaced key takes effect.
     private let composeFunc: (AgentRef, String, String, CaptureSet) async throws -> String
 
+    /// Performs the confirmed-Rewrite delivery effects (pasteboard write, chime,
+    /// notification). Constructed with real OS sinks at the composition root (#51).
+    private let promptDeliverer: PromptDeliverer
+
     /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
     /// send/event hooks can reference `self` after init completes.
     private lazy var composeOrchestrator = ComposeOrchestrator(
@@ -81,12 +85,14 @@ final class VoiceTurnController {
         menuBarHost: MenuBarHost,
         apiKeyProvider: @escaping () throws -> String,
         voice: String = "marin",
-        compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String
+        compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String,
+        promptDeliverer: PromptDeliverer
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
         self.voice = voice
         self.composeFunc = compose
+        self.promptDeliverer = promptDeliverer
         self.audio = RealtimeAudioSession()
     }
 
@@ -296,11 +302,16 @@ final class VoiceTurnController {
                 await self.composeOrchestrator.handleDecision(decision, callId: callId, capture: .empty)
             }
         case .deliver:
-            // Delivery is wired in #51. Ack the call so the Realtime turn does
-            // not hang waiting for a function_call_output.
-            TNTLog.voice.info("toolCall: deliver_prompt — ack only (delivery pending #51)")
-            serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: "ok"))
-            serialSend(ResponseCreate())
+            // The model heard an affirmation and called deliver_prompt. Drive the
+            // flow's exactly-once handshake: .userAffirmed emits .deliverRewrite
+            // (handled in apply → PromptDeliverer) and returns to idle. Ack the
+            // tool call with a function_call_output so the Realtime turn doesn't
+            // hang; deliberately NO response.create — chime + notification are the
+            // confirmation, and a fresh response would land its audio in .idle
+            // (dropped). deliver_prompt carries no payload (no injection path).
+            TNTLog.voice.info("toolCall: deliver_prompt — affirming + delivering pending Rewrite")
+            apply(flow.handle(.userAffirmed))
+            serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: "delivered"))
         case .ignore:
             TNTLog.voice.info("toolCall: \(name, privacy: .public) ignored (unknown tool or undecodable args)")
         }
@@ -372,11 +383,12 @@ final class VoiceTurnController {
             case .showError(let message):
                 menuBarHost?.setLastErrorMessage(message)
             case .deliverRewrite(let rewrite):
-                // M1: deliver the confirmed Rewrite to the target Worker Agent.
-                // Wired in the M1 tool-dispatch issue; stub handler here prevents
-                // exhaustiveness errors and lets future wiring plug in without
-                // touching this switch again.
-                TNTLog.voice.info("deliverRewrite: rewrite confirmed (len=\(rewrite.count, privacy: .public)) — delivery wiring pending M1")
+                // Confirmed Rewrite — perform the delivery effects exactly once:
+                // pasteboard write + chime + notification. The flow already cleared
+                // its pendingRewrite when it emitted this directive, so a stray
+                // second userAffirmed is a no-op (exactly-once at the flow layer).
+                TNTLog.voice.info("deliverRewrite: delivering confirmed Rewrite (len=\(rewrite.count, privacy: .public))")
+                promptDeliverer.deliver(rewrite)
             }
         }
     }
