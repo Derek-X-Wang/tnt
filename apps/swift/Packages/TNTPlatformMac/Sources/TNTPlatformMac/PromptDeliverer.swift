@@ -57,7 +57,12 @@ public protocol NotificationSink: AnyObject {
 /// All three effects are injected via tiny protocols so the contract is
 /// unit-testable without an app bundle. Real OS sinks are provided
 /// separately and wired in by the app target (`TNTMac`).
-public final class PromptDeliverer: Sendable {
+///
+/// Not `Sendable`: constructed and called only on the main actor (the
+/// `VoiceTurnController` delivery path). Dropping the conformance avoids the
+/// non-Sendable-stored-sink warnings without forcing the test fakes — which
+/// hold mutable call-count state — to become `Sendable` (issue #51).
+public final class PromptDeliverer {
 
     private let pasteboard: PasteboardSink
     private let chime: ChimeSink

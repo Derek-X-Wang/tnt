@@ -116,7 +116,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let key = try TNTCredentials.openAIKey()
                 let engine: CognitiveEngine = LocalOpenAIEngine(apiKey: key)
                 return try await engine.compose(target: agentRef, intent: intent, raw: raw, capture: capture)
-            }
+            },
+            // Real OS-backed delivery sinks (#51). PromptDeliverer is a permanent-
+            // client final class (ADR-0003); the AppKit/UserNotifications sinks live
+            // in this app target and are wired in only here.
+            promptDeliverer: PromptDeliverer(
+                pasteboard: NSPasteboardSink(),
+                chime: NSSoundChimeSink(),
+                notification: UNNotificationSink()
+            )
         )
         self.voiceTurnController = voiceController
 
