@@ -207,16 +207,18 @@ final class ProjectHeuristicTests: XCTestCase {
             "Embedded ~ after user@host strip must not be expanded")
     }
 
-    // MARK: - Zed (issue #94)
+    // MARK: - Zed (issue #94, corrected by issue #117)
 
-    /// Zed's window title format is `{filename} — {project}` (U+2014 em-dash),
-    /// matching VS Code. The project name is the second em-dash-separated segment.
+    /// Observed live: Zed window title format is `{project} — {filename}` (U+2014
+    /// em-dash). The project is the FIRST segment (not the second as #94 assumed).
+    /// The heuristic prefers the segment that does NOT look like a filename
+    /// (no leading dot, no file extension), making it robust to either order.
     ///
-    ///   `"main.swift — tnt"` → name = "tnt"
+    ///   `"tnt — main.swift"` → name = "tnt"
     func testZedSimpleTitle() {
         let ref = projectRef(
             appName: "Zed",
-            windowTitle: "main.swift \u{2014} tnt"
+            windowTitle: "tnt \u{2014} main.swift"
         )
         XCTAssertEqual(ref?.name, "tnt")
         XCTAssertNil(ref?.path)
@@ -224,13 +226,62 @@ final class ProjectHeuristicTests: XCTestCase {
 
     /// Zed with a multi-word / hyphenated project name.
     ///
-    ///   `"App.tsx — my-frontend"` → name = "my-frontend"
+    ///   `"my-frontend — App.tsx"` → name = "my-frontend"
     func testZedHyphenatedProjectName() {
         let ref = projectRef(
             appName: "Zed",
-            windowTitle: "App.tsx \u{2014} my-frontend"
+            windowTitle: "my-frontend \u{2014} App.tsx"
         )
         XCTAssertEqual(ref?.name, "my-frontend")
+    }
+
+    /// Verbatim observed case from #117: `kitcn — .mcp.json`.
+    /// `.mcp.json` is a dotfile (leading dot) → not the project.
+    /// `kitcn` has no extension and no leading dot → is the project.
+    func testZedKitcnDotfileMcpJson() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: "kitcn \u{2014} .mcp.json"
+        )
+        XCTAssertEqual(ref?.name, "kitcn",
+            "kitcn — .mcp.json: project must be kitcn, not the dotfile .mcp.json")
+        XCTAssertNil(ref?.path)
+    }
+
+    /// Dotfile in first position, project in second — heuristic must still
+    /// pick the non-filename segment regardless of order.
+    ///
+    ///   `".mcp.json — kitcn"` → name = "kitcn"
+    func testZedDotfileFirstProjectSecond() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: ".mcp.json \u{2014} kitcn"
+        )
+        XCTAssertEqual(ref?.name, "kitcn",
+            ".mcp.json — kitcn: dotfile in first position must not be chosen as project")
+    }
+
+    /// Extension-bearing filename in second position (project first).
+    ///
+    ///   `"tnt — README.md"` → name = "tnt"
+    func testZedProjectFirstExtensionFilenameSecond() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: "tnt \u{2014} README.md"
+        )
+        XCTAssertEqual(ref?.name, "tnt")
+    }
+
+    /// When both segments look like plain names (no extension, no leading dot),
+    /// prefer the first segment — matches observed current Zed layout where
+    /// the project is always first.
+    func testZedBothSegmentsLookLikeNames() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: "tnt \u{2014} main"
+        )
+        XCTAssertEqual(ref?.name, "tnt",
+            "When both segments have no extension/dot, first segment wins")
     }
 
     /// Zed welcome screen / no project open — title is just "Zed" with no
@@ -251,7 +302,7 @@ final class ProjectHeuristicTests: XCTestCase {
     func testZedLowercaseAppName() {
         let ref = projectRef(
             appName: "zed",
-            windowTitle: "README.md \u{2014} docs-project"
+            windowTitle: "docs-project \u{2014} README.md"
         )
         XCTAssertEqual(ref?.name, "docs-project")
     }
