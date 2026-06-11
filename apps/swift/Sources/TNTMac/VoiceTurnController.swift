@@ -88,6 +88,33 @@ final class VoiceTurnController {
     /// root (AppshotCapturer.captureNow). Nil = appshot arming not wired.
     private let captureAppshot: (@MainActor () -> Appshot?)?
 
+    /// Image-capable Appshot capture (M4b, #127): async because ScreenCaptureKit
+    /// is. When present, the Appshot Hotkey arms through this path so armed
+    /// shots freeze image + text together (image only if Screen Recording is
+    /// already granted — the provider preflights, never prompts).
+    private let captureAppshotWithImage: (@MainActor () async -> Appshot?)?
+
+    /// Vision Cognitive Engine call (M4b, #128), injected from the composition
+    /// root (LocalOpenAIEngine.answerAboutScreen with per-call BYOK key fetch,
+    /// ADR-0003). Nil = vision tier not wired.
+    private let answerAboutScreen: ((String, [Appshot]) async throws -> String)?
+
+    /// Single source of truth for the vision tier (counsel-confirmed, #107):
+    /// feeds BOTH `desiredSessionConfig(visionEnabled:)` (tool registration)
+    /// and the Tier-1 snapshot's `visionAvailable` (escalation hint). Flipping
+    /// this one flag enables/disables M4b end to end.
+    private let visionEnabled: Bool
+
+    /// One-shot frontmost-window image capture for the vision path (M4b).
+    /// Lives here (app target) like the other OS permanent clients.
+    private let screenImageCapturer = ScreenImageCapturer()
+
+    /// Dispatch-time handoff of resolved screen sources to the vision
+    /// orchestrator: SET on the MainActor in `handleToolCall`, TAKEN inside
+    /// the actor's synchronous `resolveSources` closure — a lock, not actor
+    /// state, because that closure cannot await.
+    private let pendingVisionSources = LockedBox<ResolvedScreenSources>()
+
     /// Armed-Appshot lifecycle (#104): store + frozen-precedence merge.
     /// The coordinator's chip callback is the single path that updates
     /// `attachedCapture`, so armed Appshots persist across turns and idle
@@ -116,10 +143,12 @@ final class VoiceTurnController {
         guard count != lastConfiguredArmedCount, let client else { return }
         lastConfiguredArmedCount = count
         let voice = self.voice
+        let visionEnabled = self.visionEnabled
         Task { @MainActor in
             try? await client.configureSession(desiredSessionConfig(
                 voice: voice,
-                armedAppshotCount: count
+                armedAppshotCount: count,
+                visionEnabled: visionEnabled
             ))
         }
     }
@@ -144,49 +173,59 @@ final class VoiceTurnController {
     /// Mixed mode per #119: armed Appshots PLUS a labeled fresh grab of the
     /// current frontmost window, so a stale armed capture can never silently
     /// answer for the screen the user is actually looking at.
-    private lazy var screenTextOrchestrator = ScreenTextOrchestrator(
-        resolveSources: { [weak self] in
-            guard let self else { return ResolvedScreenSources(armed: [], current: nil) }
-            let resolved = ScreenSourceResolver().resolve(
-                armed: self.armingCoordinator.armed,
-                freshGrab: { self.captureAppshot?() ?? nil }
-            )
-            if let pulled = resolved.current {
-                // Same-list contract: the voice-pulled grab joins the turn's
-                // appshots and is shown post-hoc on the chip. Display is
-                // transient by construction — the next coordinator chip
-                // update (turn-end idle reset) recomputes from armed only.
-                var merged = self.attachedCapture
-                merged = CaptureSet(
-                    appName: merged.appName, windowTitle: merged.windowTitle,
-                    selectedText: merged.selectedText, project: merged.project,
-                    appshots: merged.appshots + [pulled]
+    private lazy var screenTextOrchestrator: ScreenTextOrchestrator = {
+        let visionEnabled = self.visionEnabled
+        return ScreenTextOrchestrator(
+            resolveSources: { [weak self] in
+                guard let self else { return ResolvedScreenSources(armed: [], current: nil) }
+                return self.resolveScreenSourcesAndUpdateChip(label: "readScreen")
+            },
+            buildSnapshot: { question, resolved in
+                let snapshot = ScreenTextSnapshotBuilder.build(
+                    question: question,
+                    armed: resolved.armed,
+                    current: resolved.current,
+                    visionAvailable: visionEnabled,  // single flag with tool registration (#107)
+                    now: Date()
                 )
-                self.attachedCapture = merged
-                self.menuBarHost?.setCaptureSet(merged)
+                return (try? snapshot.jsonString()) ?? "{\"kind\":\"screen_text_snapshot\",\"error\":\"encode_failed\"}"
+            },
+            sendFunctionCallOutput: { [weak self] callId, json in
+                self?.serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: json))
+            },
+            sendResponseCreate: { [weak self] in
+                self?.serialSend(ResponseCreate())
             }
-            // Metadata-only (never content): which sources + how much text
-            // the snapshot will carry — "why can't it see" must be diagnosable.
-            let armedSizes = resolved.armed.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" }.joined(separator: ",")
-            let currentSize = resolved.current.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" } ?? "none"
-            TNTLog.voice.info("readScreen armed: \(resolved.armed.count, privacy: .public) [\(armedSizes, privacy: .public)] current=\(currentSize, privacy: .public)")
-            return resolved
+        )
+    }()
+
+    /// Tier-2 vision round-trip (M4b, #128). The orchestrator is an actor
+    /// (the engine call is async); its synchronous `resolveSources` closure
+    /// therefore reads a dispatch-time snapshot from `pendingVisionSources`
+    /// instead of touching MainActor state, and the send/consume closures hop
+    /// back to the MainActor. JIT Screen Recording + image enrichment live in
+    /// `visionAnswer` so the pure orchestrator (#126) stays hardware-free.
+    private lazy var visionOrchestrator = VisionOrchestrator(
+        resolveSources: { [pendingVisionSources] in
+            pendingVisionSources.take() ?? ResolvedScreenSources(armed: [], current: nil)
         },
-        buildSnapshot: { question, resolved in
-            let snapshot = ScreenTextSnapshotBuilder.build(
-                question: question,
-                armed: resolved.armed,
-                current: resolved.current,
-                visionAvailable: false,  // M4a: no vision tier yet
-                now: Date()
-            )
-            return (try? snapshot.jsonString()) ?? "{\"kind\":\"screen_text_snapshot\",\"error\":\"encode_failed\"}"
+        answerAboutScreen: { [weak self] question, appshots in
+            guard let self else { throw VisionWiringError.controllerGone }
+            return try await self.visionAnswer(question: question, appshots: appshots)
         },
-        sendFunctionCallOutput: { [weak self] callId, json in
-            self?.serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: json))
+        sendFunctionCallOutput: { [weak self] callId, output in
+            // Hop to the MainActor; the two send closures are invoked
+            // back-to-back on the actor, and MainActor enqueue order is
+            // creation order, so fco still precedes response.create.
+            Task { @MainActor in
+                self?.serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: output))
+            }
         },
         sendResponseCreate: { [weak self] in
-            self?.serialSend(ResponseCreate())
+            Task { @MainActor in self?.serialSend(ResponseCreate()) }
+        },
+        consumeArmed: { [weak self] ids in
+            Task { @MainActor in self?.armingCoordinator.consume(ids: ids) }
         }
     )
 
@@ -197,7 +236,10 @@ final class VoiceTurnController {
         compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String,
         promptDeliverer: PromptDeliverer,
         captureContext: (@MainActor () -> CaptureSet)? = nil,
-        captureAppshot: (@MainActor () -> Appshot?)? = nil
+        captureAppshot: (@MainActor () -> Appshot?)? = nil,
+        captureAppshotWithImage: (@MainActor () async -> Appshot?)? = nil,
+        answerAboutScreen: ((String, [Appshot]) async throws -> String)? = nil,
+        visionEnabled: Bool = false
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
@@ -206,6 +248,9 @@ final class VoiceTurnController {
         self.promptDeliverer = promptDeliverer
         self.captureContext = captureContext
         self.captureAppshot = captureAppshot
+        self.captureAppshotWithImage = captureAppshotWithImage
+        self.answerAboutScreen = answerAboutScreen
+        self.visionEnabled = visionEnabled
         self.audio = RealtimeAudioSession()
     }
 
@@ -259,14 +304,87 @@ final class VoiceTurnController {
     // MARK: - Appshot arming (M4a, #34)
 
     /// Appshot Hotkey pressed (⌃⌥⇧Space): capture + arm + chip update.
+    /// With the M4b image path wired, arming awaits the async capture so the
+    /// Appshot freezes image + text together (image only when Screen
+    /// Recording is already granted — the provider preflights, never prompts).
     func handleAppshotHotkey() {
         TNTLog.voice.info("appshotHotkey: capture + arm")
-        armingCoordinator.handleHotkeyPress()
+        if let captureAppshotWithImage {
+            Task { @MainActor in
+                self.armingCoordinator.armExternal(await captureAppshotWithImage())
+            }
+        } else {
+            armingCoordinator.handleHotkeyPress()
+        }
     }
 
     /// Capture Chip "Clear Last Appshot" action.
     func clearLastAppshot() {
         armingCoordinator.clearLast()
+    }
+
+    // MARK: - Screen-source resolution (shared by Tier 1 + Tier 2)
+
+    /// Resolve mixed-mode screen sources (#119) and apply the same-list
+    /// contract: a voice-pulled fresh grab joins the turn's appshots and is
+    /// shown post-hoc on the chip. Display is transient by construction —
+    /// the next coordinator chip update (turn-end idle reset) recomputes
+    /// from armed only. Logs metadata only (never content) so "why can't
+    /// it see" stays diagnosable.
+    private func resolveScreenSourcesAndUpdateChip(label: String) -> ResolvedScreenSources {
+        let resolved = ScreenSourceResolver().resolve(
+            armed: armingCoordinator.armed,
+            freshGrab: { captureAppshot?() ?? nil }
+        )
+        if let pulled = resolved.current {
+            let merged = CaptureSet(
+                appName: attachedCapture.appName, windowTitle: attachedCapture.windowTitle,
+                selectedText: attachedCapture.selectedText, project: attachedCapture.project,
+                appshots: attachedCapture.appshots + [pulled]
+            )
+            attachedCapture = merged
+            menuBarHost?.setCaptureSet(merged)
+        }
+        let armedSizes = resolved.armed.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" }.joined(separator: ",")
+        let currentSize = resolved.current.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" } ?? "none"
+        TNTLog.voice.info("\(label, privacy: .public) armed: \(resolved.armed.count, privacy: .public) [\(armedSizes, privacy: .public)] current=\(currentSize, privacy: .public)")
+        return resolved
+    }
+
+    // MARK: - Vision answer (M4b, #128)
+
+    /// The injected-engine vision call with its two app-layer concerns:
+    /// JIT Screen Recording (the FIRST analyze_screen triggers the system
+    /// prompt — never launch, never the hotkey) and live-image enrichment
+    /// (the current frontmost source gets a fresh image when it has none,
+    /// so the hands-free path works without an armed Appshot).
+    private func visionAnswer(question: String?, appshots: [Appshot]) async throws -> String {
+        guard let answerAboutScreen else { throw VisionWiringError.engineNotWired }
+
+        if !ScreenImageCapturer.preflightGranted() {
+            TNTLog.voice.info("analyzeScreen: requesting Screen Recording (JIT, first use — relaunch may be needed after grant)")
+            ScreenImageCapturer.requestAccess()
+        }
+
+        var enriched = appshots
+        // Enrich only the source representing the CURRENT frontmost window
+        // (match by app name, no image yet) — never paste a live image onto
+        // a stale armed capture of a different window. Preserves the
+        // Appshot id so consume identity (#126) is unaffected.
+        if let frontName = NSWorkspace.shared.frontmostApplication?.localizedName,
+           let idx = enriched.lastIndex(where: { $0.appName == frontName && $0.imageJPEG == nil }),
+           let image = await screenImageCapturer.captureFrontmostWindowJPEG() {
+            let a = enriched[idx]
+            enriched[idx] = Appshot(
+                id: a.id, imageJPEG: image, windowText: a.windowText,
+                appName: a.appName, windowTitle: a.windowTitle,
+                project: a.project, capturedAt: a.capturedAt
+            )
+        }
+        let imageCount = enriched.filter { $0.imageJPEG != nil }.count
+        TNTLog.voice.info("analyzeScreen: \(enriched.count, privacy: .public) sources, \(imageCount, privacy: .public) with image")
+
+        return try await answerAboutScreen(question ?? "What is on my screen?", enriched)
     }
 
     // MARK: - Pre-warm
@@ -298,6 +416,7 @@ final class VoiceTurnController {
         // in-flight compose or screen read for the previous turn is dropped on completion.
         composeOrchestrator.advanceTurnToken()
         screenTextOrchestrator.advanceTurnToken()
+        await visionOrchestrator.advanceTurnToken()
         composeInFlight = false
         toolRoute.reset()
         apply(flow.handle(.hotkeyStartListening))
@@ -376,7 +495,8 @@ final class VoiceTurnController {
             // reconnect (#67); re-sent when the armed count changes (#36).
             try await c.configureSession(desiredSessionConfig(
                 voice: voice,
-                armedAppshotCount: armingCoordinator.armedCount
+                armedAppshotCount: armingCoordinator.armedCount,
+                visionEnabled: visionEnabled
             ))
             lastConfiguredArmedCount = armingCoordinator.armedCount
         } catch {
@@ -519,10 +639,16 @@ final class VoiceTurnController {
                 // arrives next; the route clears it so the spoken-answer done reaches the flow).
             }
         case .analyzeScreen:
-            // M4b Tier-2 vision path. VisionOrchestrator will be wired in the HITL
-            // issue; for now this is a no-op in the app layer (the pure orchestrator
-            // logic lives in TNTPlatformMac issue #126, tested independently).
-            TNTLog.voice.info("toolCall: analyze_screen — M4b VisionOrchestrator not yet wired (pending HITL)")
+            // M4b Tier-2 vision path (#128). Sources are resolved HERE on the
+            // MainActor (dispatch time, per the #126 consume-identity contract)
+            // and handed to the actor through the locked box; the orchestrator
+            // owns stale-token, error-fco, and consume-on-success policy.
+            TNTLog.voice.info("toolCall: analyze_screen — dispatching Tier-2 vision round-trip")
+            toolRoute = .screenToolSuppressingFunctionDone
+            pendingVisionSources.set(resolveScreenSourcesAndUpdateChip(label: "analyzeScreen"))
+            Task {
+                await self.visionOrchestrator.handle(decision, callId: callId)
+            }
         case .ignore:
             TNTLog.voice.info("toolCall: \(name, privacy: .public) ignored (unknown tool or undecodable args)")
         }
@@ -637,5 +763,43 @@ final class VoiceTurnController {
             try? await queue?.send(ResponseCancel())
             try? await queue?.send(InputAudioBufferClear())
         }
+    }
+}
+
+// MARK: - Vision wiring helpers (M4b, #128)
+
+/// Errors the vision wiring throws into `VisionOrchestrator`, which turns
+/// them into the error-shaped fco that unblocks the Realtime turn.
+private enum VisionWiringError: Error, LocalizedError {
+    case controllerGone
+    case engineNotWired
+
+    var errorDescription: String? {
+        switch self {
+        case .controllerGone: return "controller deallocated"
+        case .engineNotWired: return "vision engine not wired"
+        }
+    }
+}
+
+/// Thread-safe one-shot handoff between the MainActor (set at tool dispatch)
+/// and the vision orchestrator actor (taken inside its synchronous
+/// `resolveSources` closure, which cannot await a MainActor hop).
+private final class LockedBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+
+    func set(_ newValue: T) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func take() -> T? {
+        lock.lock()
+        let taken = value
+        value = nil
+        lock.unlock()
+        return taken
     }
 }

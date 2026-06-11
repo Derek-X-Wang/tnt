@@ -111,6 +111,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // otherwise the bilingual default `alloy`.
         let configuredVoice = Self.loadVoiceOverride() ?? "alloy"
 
+        // Appshot capture chain (M4b, #127): ScreenCaptureKit one-shot image
+        // provider behind the AX text capturer. The image provider fails soft
+        // (nil) when Screen Recording isn't granted — preflight only, the
+        // prompt belongs to the first analyze_screen (JIT).
+        let screenImageCapturer = ScreenImageCapturer()
+        let appshotCapturer = AppshotCapturer(windowImage: {
+            await screenImageCapturer.captureFrontmostWindowJPEG()
+        })
+
         let voiceController = VoiceTurnController(
             menuBarHost: menu,
             apiKeyProvider: { try TNTCredentials.openAIKey() },
@@ -136,11 +145,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             captureContext: { [accessibilityClient = AccessibilityClient()] in
                 accessibilityClient.captureNow()
             },
-            // Text-only Appshot capture (M4a, #34): Window Text + frozen
-            // labels, no image, no Screen Recording TCC.
-            captureAppshot: { [appshotCapturer = AppshotCapturer()] in
+            // Appshot capture (M4a #34 / M4b #127). The sync path stays
+            // text-only (resolver freshGrab seam); the async path adds the
+            // window image when Screen Recording is ALREADY granted — the
+            // provider preflights and never prompts, so the hotkey can't
+            // fire a TCC dialog (JIT prompt is the first analyze_screen's).
+            captureAppshot: { [appshotCapturer] in
                 appshotCapturer.captureNow()
-            }
+            },
+            captureAppshotWithImage: { [appshotCapturer] in
+                await appshotCapturer.captureNowWithImage()
+            },
+            // Vision Cognitive Engine (M4b, #128): same composition-root
+            // pattern as compose — per-call BYOK key fetch, LocalOpenAIEngine
+            // named only here (ADR-0003). Never logs request bodies.
+            answerAboutScreen: { question, appshots in
+                let key = try TNTCredentials.openAIKey()
+                let engine: CognitiveEngine = LocalOpenAIEngine(apiKey: key)
+                return try await engine.answerAboutScreen(question: question, appshots: appshots)
+            },
+            // THE vision-tier flag (#107 single source of truth): registers
+            // analyze_screen in the session AND flips the Tier-1 snapshot's
+            // escalation hint. M4b ships enabled.
+            visionEnabled: true
         )
         self.voiceTurnController = voiceController
 
