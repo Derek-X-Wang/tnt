@@ -98,10 +98,31 @@ final class VoiceTurnController {
             return captureAppshot()
         },
         onChipUpdate: { [weak self] merged in
-            self?.attachedCapture = merged
-            self?.menuBarHost?.setCaptureSet(merged)
+            guard let self else { return }
+            self.attachedCapture = merged
+            self.menuBarHost?.setCaptureSet(merged)
+            self.reconfigureSessionIfArmedCountChanged()
         }
     )
+
+    /// Last armed count sent in a session.update — re-send the desired
+    /// config when it changes so the model's armed-context note stays
+    /// accurate (#36). No client yet → the next connect picks up the
+    /// current count from desiredSessionConfig (safe by construction).
+    private var lastConfiguredArmedCount = 0
+
+    private func reconfigureSessionIfArmedCountChanged() {
+        let count = armingCoordinator.armedCount
+        guard count != lastConfiguredArmedCount, let client else { return }
+        lastConfiguredArmedCount = count
+        let voice = self.voice
+        Task { @MainActor in
+            try? await client.configureSession(desiredSessionConfig(
+                voice: voice,
+                armedAppshotCount: count
+            ))
+        }
+    }
 
     /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
     /// send/event hooks can reference `self` after init completes.
@@ -124,7 +145,31 @@ final class VoiceTurnController {
     /// resolved upstream by the arming coordinator once wired — #107).
     private lazy var screenTextOrchestrator = ScreenTextOrchestrator(
         resolveSources: { [weak self] in
-            self?.attachedCapture.appshots ?? []
+            guard let self else { return [] }
+            // Armed-if-present, else one fresh text grab (#104 resolver).
+            let result = ScreenSourceResolver().resolve(
+                armed: self.armingCoordinator.armed,
+                freshGrab: { self.captureAppshot?() ?? nil }
+            )
+            if let pulled = result.pulled {
+                // Same-list contract: the voice-pulled grab joins the turn's
+                // appshots and is shown post-hoc on the chip. Display is
+                // transient by construction — the next coordinator chip
+                // update (turn-end idle reset) recomputes from armed only.
+                var merged = self.attachedCapture
+                merged = CaptureSet(
+                    appName: merged.appName, windowTitle: merged.windowTitle,
+                    selectedText: merged.selectedText, project: merged.project,
+                    appshots: merged.appshots + [pulled]
+                )
+                self.attachedCapture = merged
+                self.menuBarHost?.setCaptureSet(merged)
+            }
+            // Metadata-only (never content): which sources + how much text
+            // the snapshot will carry — "why can't it see" must be diagnosable.
+            let sizes = result.sources.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" }.joined(separator: ",")
+            TNTLog.voice.info("readScreen sources: \(result.sources.count, privacy: .public) [\(sizes, privacy: .public)] pulled=\(result.pulled != nil, privacy: .public)")
+            return result.sources
         },
         buildSnapshot: { question, sources in
             let snapshot = ScreenTextSnapshotBuilder.build(
@@ -323,13 +368,15 @@ final class VoiceTurnController {
         // voice + system prompt aligned. Routed through sendQueue so
         // the session.update is serialized with all subsequent sends.
         do {
-            // Register the M1 Rewrite tools on every connect so the model can
-            // call compose_agent_prompt / deliver_prompt. withRewriteTools()
-            // returns a Body, so re-wrap it in a SessionUpdate. Goes through
-            // configureSession (not a raw send) so the client can replay the
-            // config after a transparent reconnect (issue #67).
-            let body = SessionUpdate.bilingualV0(voice: voice).session.withRewriteTools()
-            try await c.configureSession(SessionUpdate(session: body))
+            // Single source of truth for the session shape (#106): Rewrite
+            // tools + read_screen_text + the armed-Appshot note. Through
+            // configureSession so the client replays it after a transparent
+            // reconnect (#67); re-sent when the armed count changes (#36).
+            try await c.configureSession(desiredSessionConfig(
+                voice: voice,
+                armedAppshotCount: armingCoordinator.armedCount
+            ))
+            lastConfiguredArmedCount = armingCoordinator.armedCount
         } catch {
             menuBarHost?.setLastErrorMessage("Could not configure session: \(error.localizedDescription)")
         }
