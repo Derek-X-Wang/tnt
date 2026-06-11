@@ -317,4 +317,124 @@ final class ScreenTextSnapshotTests: XCTestCase {
     }
 
     // MARK: - Pure: no AppKit/AX imports (compile-time guarantee — no import needed here)
+
+    // MARK: - recommendedNextTool (issue #124)
+
+    /// visionAvailable=false → recommendedNextTool must be nil (field omitted from JSON).
+    func testRecommendedNextToolNilWhenVisionDisabled() {
+        let snapshot = ScreenTextSnapshotBuilder.build(
+            question: "q",
+            armed: [],
+            current: makeAppshot(windowText: ""),
+            visionAvailable: false,
+            now: refNow
+        )
+        XCTAssertNil(snapshot.recommendedNextTool,
+            "recommendedNextTool must be nil when visionAvailable=false")
+    }
+
+    /// visionAvailable=true but source is .ok → recommendedNextTool must be nil.
+    func testRecommendedNextToolNilWhenAnySourceIsOk() {
+        let snapshot = buildArmed(
+            [makeAppshot(windowText: String(repeating: "x", count: 100))],
+            visionAvailable: true
+        )
+        XCTAssertNil(snapshot.recommendedNextTool,
+            "recommendedNextTool must be nil when any source has .ok quality")
+    }
+
+    /// visionAvailable=true AND single empty source → recommendedNextTool = "analyze_screen".
+    func testRecommendedNextToolSetWhenVisionEnabledAndAllEmpty() {
+        let snapshot = ScreenTextSnapshotBuilder.build(
+            question: "q",
+            armed: [],
+            current: makeAppshot(windowText: ""),
+            visionAvailable: true,
+            now: refNow
+        )
+        XCTAssertEqual(snapshot.recommendedNextTool, "analyze_screen",
+            "recommendedNextTool must be 'analyze_screen' when visionAvailable=true and all sources are empty")
+    }
+
+    /// visionAvailable=true AND single sparse source → recommendedNextTool = "analyze_screen".
+    func testRecommendedNextToolSetWhenVisionEnabledAndAllSparse() {
+        let snapshot = buildArmed([makeAppshot(windowText: "hi")], visionAvailable: true)
+        XCTAssertEqual(snapshot.recommendedNextTool, "analyze_screen",
+            "recommendedNextTool must be 'analyze_screen' when visionAvailable=true and all sources are sparse")
+    }
+
+    /// visionAvailable=true AND zero sources → recommendedNextTool = "analyze_screen".
+    func testRecommendedNextToolSetWhenVisionEnabledAndZeroSources() {
+        let snapshot = ScreenTextSnapshotBuilder.build(
+            question: "q",
+            armed: [],
+            current: nil,
+            visionAvailable: true,
+            now: refNow
+        )
+        XCTAssertEqual(snapshot.recommendedNextTool, "analyze_screen",
+            "recommendedNextTool must be 'analyze_screen' when visionAvailable=true and zero sources")
+    }
+
+    /// Mixed: one armed (empty) + current (ok) → recommendedNextTool nil even with visionAvailable=true.
+    func testRecommendedNextToolNilWhenMixedQualityWithOk() {
+        let emptyArmed = makeAppshot(windowText: "")
+        let okCurrent = makeAppshot(windowText: String(repeating: "y", count: 100), appName: "Cursor")
+        let snapshot = ScreenTextSnapshotBuilder.build(
+            question: "q",
+            armed: [emptyArmed],
+            current: okCurrent,
+            visionAvailable: true,
+            now: refNow
+        )
+        XCTAssertNil(snapshot.recommendedNextTool,
+            "recommendedNextTool must be nil when at least one source has .ok quality")
+    }
+
+    /// visionAvailable=false → JSON must NOT contain "recommendedNextTool" key.
+    func testRecommendedNextToolOmittedFromJSONWhenNil() throws {
+        let snapshot = buildArmed(
+            [makeAppshot(windowText: "some content here that is sufficient length")],
+            visionAvailable: false
+        )
+        let json = try snapshot.jsonString()
+        XCTAssertFalse(json.contains("recommendedNextTool"),
+            "Nil recommendedNextTool must not appear in JSON output")
+    }
+
+    /// visionAvailable=true + all empty → JSON must contain "recommendedNextTool": "analyze_screen".
+    func testRecommendedNextToolPresentInJSONWhenSet() throws {
+        let snapshot = ScreenTextSnapshotBuilder.build(
+            question: "q",
+            armed: [],
+            current: makeAppshot(windowText: ""),
+            visionAvailable: true,
+            now: refNow
+        )
+        let json = try snapshot.jsonString()
+        XCTAssertTrue(json.contains("\"recommendedNextTool\""),
+            "recommendedNextTool must appear in JSON when set")
+        XCTAssertTrue(json.contains("\"analyze_screen\""),
+            "Value must be 'analyze_screen'")
+    }
+
+    /// Version is already 2 (mixed-mode, #119); #124 is an additive optional field — stays 2.
+    func testVersionIsStill2AfterIssue124() {
+        let snapshot = buildArmed([makeAppshot(windowText: "func foo() { return 42 }")])
+        XCTAssertEqual(snapshot.version, 2,
+            "Version stays at 2 after additive recommendedNextTool field (issue #124)")
+    }
+
+    /// visionAvailable=false output is byte-identical regardless of source quality.
+    /// Ensures no regression on existing goldens.
+    func testVisionDisabledOutputByteIdentical() throws {
+        let appshot = makeAppshot(
+            windowText: "func foo() { return 42 }",
+            capturedAt: refNow.addingTimeInterval(-60)
+        )
+        let s1 = buildArmed(question: "what?", [appshot])
+        let s2 = buildArmed(question: "what?", [appshot])
+        XCTAssertEqual(try s1.jsonString(), try s2.jsonString())
+        XCTAssertFalse(try s1.jsonString().contains("recommendedNextTool"))
+    }
 }
