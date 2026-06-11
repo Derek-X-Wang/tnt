@@ -20,17 +20,23 @@ public final class AppshotCapturer {
     private let windowText: () -> String?
     private let trustGate: () -> Bool
     private let now: () -> Date
+    private let windowImage: (() async -> Data?)?
 
+    /// - Parameter windowImage: Optional async frontmost-window image provider
+    ///   (M4b, #127: `ScreenImageCapturer.captureFrontmostWindowJPEG`). Only
+    ///   `captureNowWithImage()` consults it; `captureNow()` stays text-only.
     public init(
         signals: WindowSignalsReading = AXWindowSignalsReader(),
         windowText: @escaping () -> String? = { AXWindowTextReader().readFrontmostWindowText() },
         trustGate: @escaping () -> Bool = AccessibilityClient.systemTrustGate,
-        now: @escaping () -> Date = { Date() }
+        now: @escaping () -> Date = { Date() },
+        windowImage: (() async -> Data?)? = nil
     ) {
         self.signals = signals
         self.windowText = windowText
         self.trustGate = trustGate
         self.now = now
+        self.windowImage = windowImage
     }
 
     /// Capture a frozen text-only Appshot of the frontmost window.
@@ -39,6 +45,19 @@ public final class AppshotCapturer {
     /// An app exposing no Window Text still yields a valid Appshot with
     /// frozen labels and nil text (the snapshot layer reports textQuality).
     public func captureNow() -> Appshot? {
+        buildAppshot(imageJPEG: nil)
+    }
+
+    /// Capture a frozen Appshot INCLUDING a window image when the injected
+    /// provider returns one (M4b). The provider itself fails soft (nil when
+    /// Screen Recording is not granted), so this degrades to text-only —
+    /// callers never need to branch on permission state.
+    public func captureNowWithImage() async -> Appshot? {
+        let image = windowImage == nil ? nil : await windowImage?()
+        return buildAppshot(imageJPEG: image)
+    }
+
+    private func buildAppshot(imageJPEG: Data?) -> Appshot? {
         guard trustGate() else {
             TNTLog.app.info("AppshotCapturer: Accessibility not trusted — no capture (grant in System Settings → Privacy → Accessibility)")
             return nil
@@ -53,7 +72,7 @@ public final class AppshotCapturer {
             return projectRef(appName: app, windowTitle: title)
         }()
         return Appshot(
-            imageJPEG: nil,  // M4a text tier — image arrives with M4b (#107)
+            imageJPEG: imageJPEG,  // non-nil only via captureNowWithImage (M4b)
             windowText: windowText(),
             appName: raw.appName,
             windowTitle: raw.windowTitle,

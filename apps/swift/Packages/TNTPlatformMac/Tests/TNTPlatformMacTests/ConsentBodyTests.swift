@@ -11,9 +11,9 @@ final class ConsentBodyTests: XCTestCase {
 
     private let body = ConsentBody.default
 
-    func testHasExactlySevenRequiredSections() {
+    func testHasExactlyEightRequiredSections() {
         let expected: Set<ConsentBody.SectionID> = Set(ConsentBody.SectionID.allCases)
-        XCTAssertEqual(expected.count, 7, "M0/S4 contract: exactly seven privacy categories.")
+        XCTAssertEqual(expected.count, 8, "Privacy contract: seven M0/S4 categories + Screen Recording (M4b, #127).")
         XCTAssertEqual(Set(body.sections.map(\.id)), expected, "ConsentBody.default must cover every required SectionID.")
     }
 
@@ -77,6 +77,18 @@ final class ConsentBodyTests: XCTestCase {
         let lower = section!.english.lowercased()
         XCTAssertTrue(lower.contains("opt-in") || lower.contains("opt in"))
         XCTAssertTrue(lower.contains("log") || lower.contains("session"))
+    }
+
+    func testScreenRecordingIsJITAndSingleWindow() {
+        // M4b (#127): Screen Recording must be described as just-in-time
+        // (never at launch) and scoped to a single window image in memory.
+        let section = body.section(for: .screenRecording)
+        XCTAssertNotNil(section)
+        let lower = section!.english.lowercased()
+        XCTAssertTrue(lower.contains("screen recording"))
+        XCTAssertTrue(lower.contains("first time") || lower.contains("just-in-time"))
+        XCTAssertTrue(lower.contains("never at launch"))
+        XCTAssertTrue(lower.contains("memory"))
     }
 
     func testCaptureSetSectionHasMandarinSubLine() {

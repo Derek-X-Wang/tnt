@@ -253,6 +253,23 @@ public final class AppshotArmingCoordinator {
         notifyChip()
     }
 
+    /// Arm an externally-captured Appshot (M4b, #127): the hotkey wiring
+    /// awaits async image capture outside the sync `capture` closure, then
+    /// hands the finished Appshot here. Nil is a no-op (capture failed).
+    public func armExternal(_ appshot: Appshot?) {
+        guard let appshot else { return }
+        store.arm(appshot)
+        notifyChip()
+    }
+
+    /// Consume armed Appshots by id — Tier-2 vision success only (#126).
+    /// Removes exactly the resolve-time set and refreshes the chip so
+    /// consumed rows disappear immediately.
+    public func consume(ids: Set<UUID>) {
+        store.consume(ids: ids)
+        notifyChip()
+    }
+
     /// Clear all armed Appshots (Capture Chip "clear all" action).
     public func clearAll() {
         store.clearAll()

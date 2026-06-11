@@ -25,6 +25,7 @@ public struct ConsentBody: Sendable, Equatable {
         case noTelemetry
         case noPasteboard
         case optInLogging
+        case screenRecording
     }
 
     public struct Section: Sendable, Equatable, Identifiable {
@@ -95,6 +96,12 @@ public struct ConsentBody: Sendable, Equatable {
             title: "Opt-in session logging",
             english: "Session logging is opt-in. Voice Turn audio + transcripts only get written to disk when you explicitly enable session logs; off by default and documented separately.",
             mandarin: nil
+        ),
+        Section(
+            id: .screenRecording,
+            title: "Screen Recording (vision)",
+            english: "Asking TNT to visually analyze your screen uses macOS Screen Recording. TNT requests that permission the first time you use the feature — never at launch — and captures a single window image per request, kept in memory only.",
+            mandarin: "屏幕视觉分析需要 macOS 屏幕录制权限，仅在首次使用该功能时请求；每次只截取一个窗口，且只保存在内存中。"
         ),
     ])
 }
