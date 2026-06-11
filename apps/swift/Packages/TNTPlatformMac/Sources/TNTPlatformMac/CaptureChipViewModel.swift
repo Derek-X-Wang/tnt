@@ -1,5 +1,6 @@
 // CaptureChipViewModel — pure view-model for the Capture Chip menu-bar UI
-// element (issue #81, M1; extended for Appshots in issue #102, M4a).
+// element (issue #81, M1; extended for Appshots in issue #102, M4a;
+// image plumbing in issue #125, M4b).
 //
 // Per CONTEXT.md (Capture Chip): "Menu-bar UI element that shows what context
 // is currently attached (e.g. '📎 247 chars from Cursor', '📸 ×2 Cursor,
@@ -12,8 +13,13 @@
 // - Appshot-only CaptureSet is NOT the empty state (ADR-0004: in-memory screen
 //   content must never be invisible while armed).
 // - Per-appshot preview data: app name, window title, Window-Text snippet,
-//   hasImage flag (always false in M4a).
+//   hasImage flag (derived from imageJPEG presence).
 // - clearLast() removes the newest armed Appshot; clear() remains the full clear.
+//
+// M4b additions (issue #125):
+// - AppShotPreviewRow gains imageJPEG: Data? populated from Appshot.imageJPEG.
+// - hasImage is now derived (imageJPEG != nil) rather than hardcoded false.
+//   MenuBarHost call sites that read hasImage continue to compile unchanged.
 //
 // Design constraints:
 // - Pure: imports only Foundation + TNTCore; no SwiftUI, no AppKit.
@@ -35,14 +41,23 @@ public struct AppShotPreviewRow: Equatable, Sendable {
     public let windowTitle: String
     /// Truncated Window-Text snippet for preview.
     public let windowTextSnippet: String
-    /// False in M4a (image tier arrives in M4b).
-    public let hasImage: Bool
+    /// JPEG image bytes from the Appshot (issue #125, M4b).
+    /// Nil for text-only Appshots (M4a captures without Screen Recording TCC).
+    public let imageJPEG: Data?
+    /// True when `imageJPEG` is non-nil — derived, not stored separately.
+    /// Kept as a computed property so existing MenuBarHost call sites compile.
+    public var hasImage: Bool { imageJPEG != nil }
 
-    public init(appName: String, windowTitle: String, windowTextSnippet: String, hasImage: Bool) {
+    public init(
+        appName: String,
+        windowTitle: String,
+        windowTextSnippet: String,
+        imageJPEG: Data?
+    ) {
         self.appName = appName
         self.windowTitle = windowTitle
         self.windowTextSnippet = windowTextSnippet
-        self.hasImage = hasImage
+        self.imageJPEG = imageJPEG
     }
 }
 
@@ -132,7 +147,7 @@ public struct CaptureChipViewModel: Sendable, Equatable {
                 appName: appshot.appName ?? "Unknown",
                 windowTitle: appshot.windowTitle ?? "",
                 windowTextSnippet: snippet(from: appshot.windowText),
-                hasImage: false  // M4a: image tier not yet available
+                imageJPEG: appshot.imageJPEG  // M4b: pass bytes through; nil for text-only
             )
         }
     }
