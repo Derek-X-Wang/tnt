@@ -178,4 +178,42 @@ final class AppshotTests: XCTestCase {
         XCTAssertEqual(decoded, original)
         XCTAssertTrue(decoded.appshots.isEmpty)
     }
+
+    // MARK: - Appshot.id (issue #126)
+
+    func testAppshotHasUniqueIdByDefault() {
+        let a1 = Appshot(windowText: "text")
+        let a2 = Appshot(windowText: "text")
+        XCTAssertNotEqual(a1.id, a2.id,
+            "Two separately-constructed Appshots must have distinct ids (capture-time uniqueness)")
+    }
+
+    func testAppshotWithExplicitIdPreservesIt() {
+        let fixedId = UUID()
+        let appshot = Appshot(id: fixedId, windowText: "text")
+        XCTAssertEqual(appshot.id, fixedId, "Explicit id must be used as-is")
+    }
+
+    func testAppshotIdRoundTrips() throws {
+        let original = Appshot(windowText: "hello", appName: "Cursor")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Appshot.self, from: data)
+        XCTAssertEqual(decoded.id, original.id, "id must survive Codable round-trip")
+    }
+
+    func testAppshotEqualityIncludesId() {
+        // Two appshots with same content but different ids must NOT be equal.
+        let id1 = UUID()
+        let id2 = UUID()
+        let a1 = Appshot(id: id1, windowText: "text", appName: "App")
+        let a2 = Appshot(id: id2, windowText: "text", appName: "App")
+        XCTAssertNotEqual(a1, a2, "Appshots with different ids must not be equal")
+    }
+
+    func testAppshotEqualityWithSameId() {
+        let sharedId = UUID()
+        let a1 = Appshot(id: sharedId, windowText: "text", appName: "App")
+        let a2 = Appshot(id: sharedId, windowText: "text", appName: "App")
+        XCTAssertEqual(a1, a2, "Appshots with same id and same content must be equal")
+    }
 }

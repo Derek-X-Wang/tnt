@@ -56,6 +56,17 @@ public struct ArmedAppshotStore: Equatable, Sendable {
         guard !_appshots.isEmpty else { return }
         _appshots.removeLast()
     }
+
+    /// Remove armed Appshots whose `id` is in `ids`. Preserves arm order for
+    /// all non-matching Appshots. No-op when `ids` is empty or no match found.
+    ///
+    /// Issue #126: called by `VisionOrchestrator` on a successful vision answer
+    /// to consume exactly the Appshots dispatched at resolve time — new Appshots
+    /// armed during the async vision call are untouched.
+    public mutating func consume(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        _appshots.removeAll { ids.contains($0.id) }
+    }
 }
 
 // MARK: - 2. mergeArmedAppshots
