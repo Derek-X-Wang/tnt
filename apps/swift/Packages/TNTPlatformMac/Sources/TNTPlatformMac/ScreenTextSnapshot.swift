@@ -1,7 +1,9 @@
 // ScreenTextSnapshot — Tier-1 `function_call_output` payload builder for M4a.
 //
-// Turns `(question, [Appshot], visionAvailable: Bool)` into the JSON string
-// the Realtime model reads as the `read_screen_text` tool's output.
+// Turns `(question, armed: [Appshot], current: Appshot?, visionAvailable, now)`
+// into the JSON string the Realtime model reads as the `read_screen_text`
+// tool's output. Mixed mode (#119): armed and current sources side by side,
+// labeled, with per-source capture age.
 //
 // Per ADR-0006 (amendment): Tier 1 returns Window-Text snapshots directly —
 // no Cognitive Engine call, no image bytes. This builder is the single source
@@ -19,8 +21,10 @@ import TNTCore
 
 // MARK: - Source kind
 
-/// Whether the Appshot came from the arm queue or a fresh voice-pulled grab.
-/// Corresponds to ADR-0006's "armed Appshots if present, else fresh grab" rule.
+/// Whether the Appshot came from the arm queue or the fresh grab of the
+/// current frontmost window. Mixed mode (#119): one snapshot can carry both,
+/// each source labeled, so the model knows what is on screen NOW versus what
+/// the user deliberately captured earlier.
 public enum ScreenTextSourceKind: String, Encodable, Equatable, Sendable {
     case armedAppshot = "armed_appshot"
     case freshGrab    = "fresh_grab"
@@ -45,6 +49,10 @@ public struct ScreenTextSnapshotSource: Encodable, Equatable, Sendable {
     public let appName: String
     public let windowTitle: String
     public let source: ScreenTextSourceKind
+    /// Seconds between capture and snapshot build (#119) — lets the model
+    /// flag staleness ("from your Arc capture 4 minutes ago"). Nil when the
+    /// Appshot carries no `capturedAt` (pre-#119 payloads).
+    public let capturedSecondsAgo: Int?
     public let text: String
     public let originalCharCount: Int
     public let returnedCharCount: Int
@@ -55,6 +63,7 @@ public struct ScreenTextSnapshotSource: Encodable, Equatable, Sendable {
         case appName        = "appName"
         case windowTitle    = "windowTitle"
         case source
+        case capturedSecondsAgo
         case text
         case originalCharCount
         case returnedCharCount
@@ -66,6 +75,7 @@ public struct ScreenTextSnapshotSource: Encodable, Equatable, Sendable {
         appName: String,
         windowTitle: String,
         source: ScreenTextSourceKind,
+        capturedSecondsAgo: Int?,
         text: String,
         originalCharCount: Int,
         returnedCharCount: Int,
@@ -75,6 +85,7 @@ public struct ScreenTextSnapshotSource: Encodable, Equatable, Sendable {
         self.appName = appName
         self.windowTitle = windowTitle
         self.source = source
+        self.capturedSecondsAgo = capturedSecondsAgo
         self.text = text
         self.originalCharCount = originalCharCount
         self.returnedCharCount = returnedCharCount
@@ -114,7 +125,9 @@ public struct ScreenTextSnapshot: Encodable, Equatable, Sendable {
         instruction: String
     ) {
         self.kind = "screen_text_snapshot"
-        self.version = 1
+        // v2 (#119): mixed armed+current sources, per-source kind labels,
+        // capturedSecondsAgo, name-your-source instruction.
+        self.version = 2
         self.question = question
         self.sources = sources
         self.fullVisionAvailable = fullVisionAvailable
@@ -156,22 +169,31 @@ public struct ScreenTextSnapshotBuilder {
     /// The elision marker inserted between head and tail when truncated.
     public static let elisionMarker: String = "\n…[truncated]…\n"
 
-    /// Build a snapshot from a list of Appshots and an optional question.
+    /// Build a snapshot from the resolved sources and an optional question.
+    ///
+    /// Mixed mode (#119): armed Appshots come first (deliberate user intent,
+    /// arm order), the fresh `current` grab last, each labeled with its kind
+    /// and capture age. The budget is distributed across ALL sources.
     ///
     /// - Parameters:
     ///   - question: The user's question from the tool call arguments.
-    ///   - appshots: The source Appshots (armed-order preferred).
-    ///   - sourceKind: The kind to tag all sources with (`armed_appshot` or `fresh_grab`).
+    ///   - armed: Armed Appshots (arm order; already deduped by the resolver).
+    ///   - current: Fresh grab of the current frontmost window, if captured.
     ///   - visionAvailable: Whether `analyze_screen` is registered. M4a passes `false`;
     ///     M4b flips this to `true` and the builder emits the escalation hint.
+    ///   - now: Reference instant for `capturedSecondsAgo` (injected — keeps
+    ///     the builder pure and golden-testable).
     /// - Returns: A `ScreenTextSnapshot` ready for `jsonString()`.
     public static func build(
         question: String?,
-        appshots: [Appshot],
-        sourceKind: ScreenTextSourceKind,
-        visionAvailable: Bool
+        armed: [Appshot],
+        current: Appshot?,
+        visionAvailable: Bool,
+        now: Date
     ) -> ScreenTextSnapshot {
-        let sources = buildSources(appshots: appshots, sourceKind: sourceKind)
+        let entries: [(Appshot, ScreenTextSourceKind)] =
+            armed.map { ($0, .armedAppshot) } + (current.map { [($0, .freshGrab)] } ?? [])
+        let sources = buildSources(entries: entries, now: now)
         let instruction = buildInstruction(visionAvailable: visionAvailable)
         return ScreenTextSnapshot(
             question: question,
@@ -184,29 +206,31 @@ public struct ScreenTextSnapshotBuilder {
     // MARK: - Private helpers
 
     private static func buildSources(
-        appshots: [Appshot],
-        sourceKind: ScreenTextSourceKind
+        entries: [(Appshot, ScreenTextSourceKind)],
+        now: Date
     ) -> [ScreenTextSnapshotSource] {
-        guard !appshots.isEmpty else { return [] }
+        guard !entries.isEmpty else { return [] }
 
         // Distribute the budget evenly across sources; each source gets at least
         // one slot in the output even if the budget is fully exhausted.
-        let budgetPerSource = max(1, totalBudget / appshots.count)
+        let budgetPerSource = max(1, totalBudget / entries.count)
 
-        return appshots.map { appshot in
-            buildSource(appshot: appshot, sourceKind: sourceKind, budget: budgetPerSource)
+        return entries.map { appshot, kind in
+            buildSource(appshot: appshot, sourceKind: kind, budget: budgetPerSource, now: now)
         }
     }
 
     private static func buildSource(
         appshot: Appshot,
         sourceKind: ScreenTextSourceKind,
-        budget: Int
+        budget: Int,
+        now: Date
     ) -> ScreenTextSnapshotSource {
         let rawText = appshot.windowText ?? ""
         let original = rawText.count
         let appName = appshot.appName ?? "Unknown"
         let windowTitle = appshot.windowTitle ?? ""
+        let age = appshot.capturedAt.map { max(0, Int(now.timeIntervalSince($0).rounded())) }
 
         let quality = textQuality(for: rawText)
 
@@ -216,6 +240,7 @@ public struct ScreenTextSnapshotBuilder {
                 appName: appName,
                 windowTitle: windowTitle,
                 source: sourceKind,
+                capturedSecondsAgo: age,
                 text: rawText,
                 originalCharCount: original,
                 returnedCharCount: original,
@@ -231,6 +256,7 @@ public struct ScreenTextSnapshotBuilder {
                 appName: appName,
                 windowTitle: windowTitle,
                 source: sourceKind,
+                capturedSecondsAgo: age,
                 text: "",
                 originalCharCount: original,
                 returnedCharCount: 0,
@@ -254,6 +280,7 @@ public struct ScreenTextSnapshotBuilder {
             appName: appName,
             windowTitle: windowTitle,
             source: sourceKind,
+            capturedSecondsAgo: age,
             text: truncated,
             originalCharCount: original,
             returnedCharCount: returned,
@@ -270,10 +297,17 @@ public struct ScreenTextSnapshotBuilder {
     }
 
     private static func buildInstruction(visionAvailable: Bool) -> String {
+        // Name-your-source + staleness rules (#119). The model must never
+        // silently answer from a stale armed capture when the user is asking
+        // about the current screen.
+        let base = "Always name the window you are reading from (e.g. 'From your Arc window: …'). "
+            + "Sources marked armed_appshot are earlier captures the user deliberately attached — capturedSecondsAgo says how old. "
+            + "The fresh_grab source is the user's CURRENT frontmost window. "
+            + "If the question is about the current screen but the fresh_grab text is empty or sparse, say that window exposes no readable text and name the armed capture(s) you have instead — do not answer from them as if they were the screen. "
+            + "Some apps (Google Docs, Gmail, image-only windows) expose little or no text."
         if visionAvailable {
-            return "Answer only if the question can be answered from this text. If the text is insufficient or empty, call analyze_screen for a vision-capable answer."
-        } else {
-            return "Answer only if the question can be answered from this text. Some apps (Google Docs, Gmail, image-only windows) may expose little or no text — the snapshot will say so."
+            return base + " If no source can answer the question, call analyze_screen for a vision-capable answer."
         }
+        return base
     }
 }

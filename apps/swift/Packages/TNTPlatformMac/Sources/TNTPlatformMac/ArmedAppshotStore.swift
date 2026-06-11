@@ -10,7 +10,9 @@
 // 2. mergeArmedAppshots — frozen-context precedence: newest-armed non-nil
 //    field wins the top-level CaptureSet fields; the `appshots` array is
 //    the source of truth.
-// 3. ScreenSourceResolver — armed-if-present-else-fresh per ADR-0006.
+// 3. ScreenSourceResolver — mixed mode per #119: armed PLUS a labeled fresh
+//    grab of the current frontmost window (fresh supersedes a same-window
+//    armed duplicate).
 // 4. AppshotArmingCoordinator — press→capture→arm→chip-update policy with
 //    injected closures so the app-layer wiring is a thin adapter.
 
@@ -114,14 +116,42 @@ public func mergeArmedAppshots(fresh: CaptureSet, armed: [Appshot]) -> CaptureSe
 
 // MARK: - 3. ScreenSourceResolver
 
+/// The resolved inputs for one `read_screen_text` snapshot (#119 mixed mode):
+/// armed Appshots PLUS a fresh grab of the current frontmost window, kept
+/// separate so the snapshot can label each source `armed_appshot` vs
+/// `fresh_grab` and the model knows what is on screen NOW.
+public struct ResolvedScreenSources: Equatable, Sendable {
+
+    /// Armed Appshots to include, in arm order — minus any superseded by
+    /// `current` (same app + window title: the fresh grab IS that window's
+    /// up-to-date text; duplicating it would waste the snapshot budget).
+    public let armed: [Appshot]
+
+    /// Fresh grab of the current frontmost window. Nil when capture failed
+    /// (Accessibility untrusted, no readable frontmost window). This is the
+    /// turn-scoped voice-pulled Appshot: the caller appends it to the turn's
+    /// `CaptureSet.appshots` and it clears at turn end.
+    public let current: Appshot?
+
+    public init(armed: [Appshot], current: Appshot?) {
+        self.armed = armed
+        self.current = current
+    }
+
+    public var isEmpty: Bool { armed.isEmpty && current == nil }
+}
+
 /// Resolves the source Appshots for a `read_screen_text` tool call.
 ///
-/// Per ADR-0006: armed Appshots take priority over a fresh frontmost-window
-/// grab. The fresh-grab closure is called at most once and only when no
-/// armed Appshots are present.
+/// Mixed mode per #119 (supersedes the original armed-if-present-else-fresh
+/// rule): the fresh-grab closure is ALWAYS called exactly once, so the model
+/// always sees the current frontmost window alongside any armed captures —
+/// the fix for stale armed Appshots silently answering about the wrong window.
 ///
 /// - Note: `read_screen_text` (Tier 1) never *consumes* armed Appshots —
 ///   only `analyze_screen` (Tier 2, M4b) consumes on a successful answer.
+///   The dedupe below only affects what enters ONE snapshot; the store is
+///   never mutated here.
 public struct ScreenSourceResolver {
 
     public init() {}
@@ -131,23 +161,27 @@ public struct ScreenSourceResolver {
     /// - Parameters:
     ///   - armed: Currently armed Appshots from `ArmedAppshotStore`.
     ///   - freshGrab: Closure that captures a fresh frontmost-window Appshot.
-    ///     Called exactly once, and only when `armed` is empty.
-    /// - Returns:
-    ///   - `sources`: The Appshots to use (armed if any, else fresh if captured).
-    ///   - `pulled`: The voice-pulled fresh Appshot, if one was grabbed. The
-    ///     caller should append this to `CaptureSet.appshots` for the current
-    ///     turn and clear it at turn end.
+    ///     Always called exactly once.
+    /// - Returns: Armed Appshots (deduped against the fresh grab) plus the
+    ///   fresh `current` grab, kept separate for per-source labeling.
     public func resolve(
         armed: [Appshot],
         freshGrab: () -> Appshot?
-    ) -> (sources: [Appshot], pulled: Appshot?) {
-        if !armed.isEmpty {
-            // Armed present: use armed, never invoke the fresh-grab closure.
-            return (sources: armed, pulled: nil)
+    ) -> ResolvedScreenSources {
+        guard let current = freshGrab() else {
+            // Capture failed: armed captures are all we have.
+            return ResolvedScreenSources(armed: armed, current: nil)
         }
-        // No armed Appshots: call the fresh-grab closure exactly once.
-        let grabbed = freshGrab()
-        return (sources: grabbed.map { [$0] } ?? [], pulled: grabbed)
+        // Fresh supersedes an armed shot of the SAME window (app + title):
+        // identical text twice would eat the snapshot budget for nothing.
+        // A same-app different-title armed shot is kept — it is a different
+        // document, and capture age disambiguates.
+        let kept = armed.filter { shot in
+            !(current.appName != nil
+              && shot.appName == current.appName
+              && shot.windowTitle == current.windowTitle)
+        }
+        return ResolvedScreenSources(armed: kept, current: current)
     }
 }
 

@@ -4,8 +4,8 @@
 // structure: injected closures, stale-turn-token guard, no hardware/network deps.
 //
 // Responsibilities:
-// - Resolve sources via injected `resolveSources` closure (armed-else-fresh
-//   decision already encoded in the ScreenSourceResolver layer).
+// - Resolve sources via injected `resolveSources` closure (mixed armed+current
+//   per #119, already encoded in the ScreenSourceResolver layer).
 // - Build the snapshot JSON via injected `buildSnapshot` closure.
 // - Emit `function_call_output` then `response.create` — both are mandatory;
 //   a tool call without its output stalls the Realtime turn permanently.
@@ -14,8 +14,8 @@
 // - Tier 1 NEVER consumes armed Appshots (that is M4b's role).
 //
 // Driven entirely by injected closures:
-// - resolveSources: () -> [Appshot]              armed-or-fresh slice
-// - buildSnapshot: (String?, [Appshot]) -> String fco JSON body
+// - resolveSources: () -> ResolvedScreenSources       armed + current slice
+// - buildSnapshot: (String?, ResolvedScreenSources) -> String  fco JSON body
 // - sendFunctionCallOutput: (String, String) -> Void  (callId, snapshotJSON)
 // - sendResponseCreate: () -> Void
 //
@@ -35,8 +35,8 @@ public final class ScreenTextOrchestrator {
 
     // MARK: - Types
 
-    public typealias ResolveSources    = () -> [Appshot]
-    public typealias BuildSnapshot     = (String?, [Appshot]) -> String
+    public typealias ResolveSources    = () -> ResolvedScreenSources
+    public typealias BuildSnapshot     = (String?, ResolvedScreenSources) -> String
     public typealias SendFunctionCallOutput = (String, String) -> Void
     public typealias SendResponseCreate    = () -> Void
 
@@ -96,12 +96,12 @@ public final class ScreenTextOrchestrator {
         // Snapshot the token at dispatch time.
         let dispatchToken = turnToken
 
-        // Resolve the source Appshots (armed-else-fresh).
+        // Resolve the source Appshots (mixed armed + current, #119).
         // This closure is synchronous in M4a (no async AX calls).
-        let sources = resolveSources()
+        let resolved = resolveSources()
 
         // Build the snapshot JSON. Also synchronous in M4a.
-        let snapshotJSON = buildSnapshot(args.question, sources)
+        let snapshotJSON = buildSnapshot(args.question, resolved)
 
         // Stale-turn guard: if barge-in occurred while resolving/building, drop.
         guard turnToken == dispatchToken else {

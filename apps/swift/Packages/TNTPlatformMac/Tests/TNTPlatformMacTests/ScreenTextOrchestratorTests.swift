@@ -26,26 +26,9 @@ final class ScreenTextOrchestratorTests: XCTestCase {
         )
     }
 
-    /// Build a ScreenTextOrchestrator where the log captures ordered calls.
-    private func makeOrchestrator(
-        sources: [Appshot] = [],
-        snapshotResult: String = "{\"kind\":\"screen_text_snapshot\"}"
-    ) -> (ScreenTextOrchestrator, [String]) {
-        var log: [String] = []
-        let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { sources },
-            buildSnapshot: { question, appshots in
-                log.append("build:\(question ?? "nil"):\(appshots.count)")
-                return snapshotResult
-            },
-            sendFunctionCallOutput: { callId, json in
-                log.append("fco:\(callId):\(json.prefix(20))")
-            },
-            sendResponseCreate: {
-                log.append("rc")
-            }
-        )
-        return (orchestrator, log)
+    /// Empty resolved sources for tests that don't care about source content.
+    private var noSources: ResolvedScreenSources {
+        ResolvedScreenSources(armed: [], current: nil)
     }
 
     // =========================================================================
@@ -129,7 +112,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testFcoEmittedBeforeResponseCreate() async {
         var log: [String] = []
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "{}" },
             sendFunctionCallOutput: { _, _ in log.append("fco") },
             sendResponseCreate: { log.append("rc") }
@@ -147,7 +130,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testFcoCarriesSnapshotJSON() async {
         var capturedOutput: String?
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in #"{"kind":"screen_text_snapshot"}"# },
             sendFunctionCallOutput: { _, json in capturedOutput = json },
             sendResponseCreate: {}
@@ -161,7 +144,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testFcoCarriesCorrectCallId() async {
         var capturedCallId: String?
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "{}" },
             sendFunctionCallOutput: { callId, _ in capturedCallId = callId },
             sendResponseCreate: {}
@@ -173,7 +156,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testBuildSnapshotReceivesQuestionFromArgs() async {
         var receivedQuestion: String?
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { question, _ in
                 receivedQuestion = question
                 return "{}"
@@ -190,9 +173,9 @@ final class ScreenTextOrchestratorTests: XCTestCase {
         let appshots = [makeAppshot(appName: "Cursor"), makeAppshot(appName: "Chrome")]
         var receivedCount: Int?
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { appshots },
+            resolveSources: { ResolvedScreenSources(armed: appshots, current: nil) },
             buildSnapshot: { _, sources in
-                receivedCount = sources.count
+                receivedCount = sources.armed.count
                 return "{}"
             },
             sendFunctionCallOutput: { _, _ in },
@@ -207,7 +190,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testComposeDecisionIsNoOp() async {
         var log: [String] = []
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "x" },
             sendFunctionCallOutput: { _, _ in log.append("fco") },
             sendResponseCreate: { log.append("rc") }
@@ -220,7 +203,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testDeliverDecisionIsNoOp() async {
         var log: [String] = []
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "x" },
             sendFunctionCallOutput: { _, _ in log.append("fco") },
             sendResponseCreate: { log.append("rc") }
@@ -232,7 +215,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     func testIgnoreDecisionIsNoOp() async {
         var log: [String] = []
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "x" },
             sendFunctionCallOutput: { _, _ in log.append("fco") },
             sendResponseCreate: { log.append("rc") }
@@ -256,7 +239,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
             resolveSources: {
                 // Mid-execution barge-in: advance the token.
                 orchestratorRef?.advanceTurnToken()
-                return []
+                return ResolvedScreenSources(armed: [], current: nil)
             },
             buildSnapshot: { _, _ in "{}" },
             sendFunctionCallOutput: { _, _ in fcoCount += 1 },
@@ -274,7 +257,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
         // After advancing the token, a new decision must still fire normally.
         var rcCount = 0
         let orchestrator = ScreenTextOrchestrator(
-            resolveSources: { [] },
+            resolveSources: { self.noSources },
             buildSnapshot: { _, _ in "{}" },
             sendFunctionCallOutput: { _, _ in },
             sendResponseCreate: { rcCount += 1 }
@@ -303,7 +286,7 @@ final class ScreenTextOrchestratorTests: XCTestCase {
         var buildCallCount = 0
         let orchestrator = ScreenTextOrchestrator(
             // resolveSources returns the armed Appshots; store is NOT mutated
-            resolveSources: { store.appshots },
+            resolveSources: { ResolvedScreenSources(armed: store.appshots, current: nil) },
             buildSnapshot: { _, sources in
                 buildCallCount += 1
                 return "{}"
