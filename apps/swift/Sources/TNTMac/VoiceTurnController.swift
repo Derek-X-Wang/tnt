@@ -49,6 +49,11 @@ final class VoiceTurnController {
     /// so the earlier function-call `response.done` doesn't reset the turn.
     private var composeInFlight = false
 
+    /// Routing policy for the current in-flight tool call (issue #105). Replaces
+    /// the ad-hoc `composeInFlight` bool with a typed enum; will fully supersede
+    /// the bool once the controller is migrated to InFlightToolRoute end-to-end.
+    private var toolRoute = InFlightToolRoute.none
+
     /// Serialized outbound tail: each `serialSend` awaits the previous so
     /// ordering holds (a `function_call_output` MUST precede its `response.create`).
     private var outboundTail: Task<Void, Never>?
@@ -91,6 +96,31 @@ final class VoiceTurnController {
         },
         onEvent: { [weak self] event in
             Task { @MainActor in self?.handleOrchestratorEvent(event) }
+        }
+    )
+
+    /// Tier-1 screen-text round-trip policy (issue #105, M4a). Mirrors the
+    /// composeOrchestrator pattern with injected closures for testability.
+    /// resolveSources uses the attached capture's Appshots (armed-or-fresh
+    /// resolved upstream by the arming coordinator once wired — #107).
+    private lazy var screenTextOrchestrator = ScreenTextOrchestrator(
+        resolveSources: { [weak self] in
+            self?.attachedCapture.appshots ?? []
+        },
+        buildSnapshot: { question, sources in
+            let snapshot = ScreenTextSnapshotBuilder.build(
+                question: question,
+                appshots: sources,
+                sourceKind: sources.isEmpty ? .freshGrab : .armedAppshot,
+                visionAvailable: false  // M4a: no vision tier yet
+            )
+            return (try? snapshot.jsonString()) ?? "{\"kind\":\"screen_text_snapshot\",\"error\":\"encode_failed\"}"
+        },
+        sendFunctionCallOutput: { [weak self] callId, json in
+            self?.serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: json))
+        },
+        sendResponseCreate: { [weak self] in
+            self?.serialSend(ResponseCreate())
         }
     )
 
@@ -176,10 +206,12 @@ final class VoiceTurnController {
             TNTLog.voice.error("startListening: no client after ensureConnection — aborting (see prior error)")
             return
         }
-        // New Voice Turn: advance the orchestrator's turn-generation token so any
-        // in-flight compose for the previous turn is dropped on completion.
+        // New Voice Turn: advance the orchestrators' turn-generation tokens so any
+        // in-flight compose or screen read for the previous turn is dropped on completion.
         composeOrchestrator.advanceTurnToken()
+        screenTextOrchestrator.advanceTurnToken()
         composeInFlight = false
+        toolRoute.reset()
         apply(flow.handle(.hotkeyStartListening))
     }
 
@@ -319,8 +351,16 @@ final class VoiceTurnController {
         case .responseAudioDelta(let delta):
             apply(flow.handle(.audioDelta(delta.delta)))
         case .responseDone(let done):
-            if composeInFlight {
-                // Consumed by the orchestrator: it fires .confirmationProduced on
+            if toolRoute.suppressesNextDone {
+                // Tier-1 screen-text path: the first response.done after a
+                // read_screen_text is the synthetic fco-response. Suppress it
+                // (don't route to VoiceTurnFlow) and clear the route so the
+                // next response.done (spoken answer) reaches the flow normally
+                // and drives (.speaking,.responseDone) → .idle.
+                TNTLog.voice.info("serverEvent: response.done — suppressed (screen fco-response)")
+                toolRoute.markFunctionDoneSuppressed()
+            } else if composeInFlight {
+                // Consumed by the compose orchestrator: it fires .confirmationProduced on
                 // the spoken-confirm response.done. Routing to the flow here would
                 // prematurely reset the turn on the earlier function-call done.
                 composeOrchestrator.handleResponseDone(responseId: done.responseId, status: done.status)
@@ -332,6 +372,7 @@ final class VoiceTurnController {
             let summary = err.error.message ?? err.error.code ?? "Realtime error"
             TNTLog.voice.error("serverEvent: error — \(summary, privacy: .public)")
             composeInFlight = false
+            toolRoute.reset()
             apply(flow.handle(.responseError(summary)))
             // Drop the dead client so the next hotkey press reconnects.
             self.client = nil
@@ -373,6 +414,20 @@ final class VoiceTurnController {
             TNTLog.voice.info("toolCall: deliver_prompt — affirming + delivering pending Rewrite")
             apply(flow.handle(.userAffirmed))
             serialSend(ConversationItemCreateFunctionOutput(callId: callId, output: "delivered"))
+        case .readScreen:
+            // Tier-1 screen-text path (issue #105, M4a): resolve armed Appshots (or
+            // fresh-grab via the store once the arming coordinator is wired), build the
+            // snapshot JSON, and emit fco + response.create. The next response.done is
+            // the synthetic fco-response which must not reset the turn; after that the
+            // spoken-answer response.done flows normally to VoiceTurnFlow.
+            TNTLog.voice.info("toolCall: read_screen_text — dispatching Tier-1 screen text snapshot")
+            toolRoute = .screenToolSuppressingFunctionDone
+            screenTextOrchestrator.advanceTurnToken()
+            Task { @MainActor in
+                await self.screenTextOrchestrator.handleDecision(decision, callId: callId)
+                // After fco + rc emitted, arm the route suppression (the fco response.done
+                // arrives next; the route clears it so the spoken-answer done reaches the flow).
+            }
         case .ignore:
             TNTLog.voice.info("toolCall: \(name, privacy: .public) ignored (unknown tool or undecodable args)")
         }

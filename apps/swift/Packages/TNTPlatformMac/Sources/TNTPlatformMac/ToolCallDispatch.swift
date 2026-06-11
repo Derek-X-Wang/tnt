@@ -1,15 +1,18 @@
-// ToolCallDispatch — pure Realtime tool-call decode + classify (issue #78).
+// ToolCallDispatch — pure Realtime tool-call decode + classify (issue #78;
+// extended for read_screen_text in issue #105).
 //
 // Converts a Realtime server event's raw (name, argumentsJSON) pair into a
 // typed `ToolCallDecision` so `VoiceTurnController` (the app-target glue
 // layer) never does JSON decoding inline and remains untestable.
 //
-// Design constraints (issue #78):
+// Design constraints:
 // - Takes String primitives only — matching
 //   `RealtimeServerEvent.functionCallArgumentsDone(callId:name:argumentsJSON:)`
 //   associated values — so TNTRealtime is never imported here.
 // - Decode fails **soft**: argumentsJSON is model-generated and may not conform,
 //   so a malformed/missing-field payload must not crash the caller.
+// - read_screen_text malformed → still `.readScreen` with nil question (the
+//   turn must proceed regardless; question is best-effort).
 // - Imports only TNTCore (enforced by the Package.swift dependency graph).
 
 import Foundation
@@ -52,6 +55,35 @@ public struct ComposeAgentPromptArgs: Decodable, Equatable, Sendable {
     }
 }
 
+/// Decoded arguments for the `read_screen_text` Tier-1 tool call.
+///
+/// The `question` field is required in the schema but the model may emit
+/// a malformed payload. Soft-decode: a malformed JSON still produces a
+/// `ReadScreenArgs` with `nil` question so the turn can proceed.
+public struct ReadScreenArgs: Equatable, Sendable {
+
+    /// The user's question passed verbatim from the model. `nil` if the
+    /// model emitted malformed JSON (the turn proceeds anyway).
+    public let question: String?
+
+    public init(question: String?) {
+        self.question = question
+    }
+
+    // MARK: - Soft decode
+
+    /// Soft-decode from raw JSON. On any failure, returns `ReadScreenArgs(question: nil)`
+    /// so the screen tool still fires (question is best-effort).
+    public static func decode(from argumentsJSON: String) -> ReadScreenArgs {
+        guard let data = argumentsJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let question = obj["question"] as? String else {
+            return ReadScreenArgs(question: nil)
+        }
+        return ReadScreenArgs(question: question)
+    }
+}
+
 // MARK: - Decision
 
 /// The typed outcome of dispatching a Realtime tool-call name.
@@ -60,6 +92,8 @@ public enum ToolCallDecision: Equatable, Sendable {
     case compose(ComposeAgentPromptArgs)
     /// `deliver_prompt` — deliver the pending Rewrite to the Worker Agent.
     case deliver
+    /// `read_screen_text` — run the Tier-1 screen text snapshot path.
+    case readScreen(ReadScreenArgs)
     /// Any other tool name (or a `compose_agent_prompt` with undecodable args).
     case ignore
 }
@@ -71,7 +105,8 @@ public enum ToolCallDecision: Equatable, Sendable {
 /// - Parameters:
 ///   - name: The tool name from the server event (e.g. `"compose_agent_prompt"`).
 ///   - argumentsJSON: The raw arguments JSON string from the server event.
-/// - Returns: A typed decision; never throws — malformed payloads produce `.ignore`.
+/// - Returns: A typed decision; never throws — malformed payloads produce `.ignore`
+///   (or for `read_screen_text`, `.readScreen(ReadScreenArgs(question: nil))`).
 public func classifyToolCall(name: String, argumentsJSON: String) -> ToolCallDecision {
     switch name {
     case "compose_agent_prompt":
@@ -81,6 +116,9 @@ public func classifyToolCall(name: String, argumentsJSON: String) -> ToolCallDec
         return .compose(args)
     case "deliver_prompt":
         return .deliver
+    case "read_screen_text":
+        // Always returns .readScreen — even on malformed JSON. The question may be nil.
+        return .readScreen(ReadScreenArgs.decode(from: argumentsJSON))
     default:
         return .ignore
     }
