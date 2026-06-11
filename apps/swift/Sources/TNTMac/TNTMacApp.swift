@@ -97,6 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onCheckForUpdates: { [weak self] in
                 self?.sparkle.checkForUpdates()
+            },
+            onClearContext: { [weak self] in
+                self?.voiceTurnController?.clearAttachedCapture()
             }
         )
         self.menuBarHost = menu
@@ -138,6 +141,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             TNTLog.app.info("installRuntime: pre-warming audio device (mic granted, prewarm on)")
             voiceController.prewarmAudio()
         }
+
+#if DEBUG
+        // Dogfood hook for the Capture Chip (#52) until live AX capture (#49):
+        // pushes a sample CaptureSet through the same controller path the real
+        // capture will use, so preview + Clear Context are verifiable today.
+        menu.debugAttachSampleContext = { [weak voiceController] in
+            voiceController?.setAttachedCapture(CaptureSet(
+                appName: "Cursor",
+                windowTitle: "VoiceTurnController.swift — tnt",
+                selectedText: "func startListening() async { … }",
+                project: ProjectRef(name: "tnt", path: "/Users/derekxwang/Development/incubator/TnT/tnt")
+            ))
+        }
+#endif
 
         let host = HotkeyHost(chord: chord) { [weak self, weak menu] event in
             guard let menu else { return }

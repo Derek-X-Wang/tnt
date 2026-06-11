@@ -66,6 +66,12 @@ final class VoiceTurnController {
     /// notification). Constructed with real OS sinks at the composition root (#51).
     private let promptDeliverer: PromptDeliverer
 
+    /// The Capture Set attached to the next Voice Turn, mirrored to the menu
+    /// bar's Capture Chip (#52). Stays `.empty` until live AX capture lands
+    /// (#49); the user can clear it from the chip at any time, which
+    /// suppresses context for the next turn.
+    private(set) var attachedCapture: CaptureSet = .empty
+
     /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
     /// send/event hooks can reference `self` after init completes.
     private lazy var composeOrchestrator = ComposeOrchestrator(
@@ -94,6 +100,21 @@ final class VoiceTurnController {
         self.composeFunc = compose
         self.promptDeliverer = promptDeliverer
         self.audio = RealtimeAudioSession()
+    }
+
+    // MARK: - Capture Set (#52)
+
+    /// Attach a Capture Set to the next Voice Turn and reflect it on the
+    /// Capture Chip. Called by the capture path (#49) at turn-start.
+    func setAttachedCapture(_ capture: CaptureSet) {
+        attachedCapture = capture
+        menuBarHost?.setCaptureSet(capture)
+    }
+
+    /// Clear the attached context (Capture Chip "Clear Context" action).
+    /// The next Voice Turn goes out with no Capture Set until re-captured.
+    func clearAttachedCapture() {
+        setAttachedCapture(.empty)
     }
 
     // MARK: - Pre-warm
@@ -298,8 +319,9 @@ final class VoiceTurnController {
             TNTLog.voice.info("toolCall: compose_agent_prompt — dispatching to Cognitive Engine")
             composeInFlight = true
             Task { @MainActor in
-                // CaptureSet is a stub here (#50); live capture lands in #49/#52.
-                await self.composeOrchestrator.handleDecision(decision, callId: callId, capture: .empty)
+                // Attached capture is .empty until live AX capture lands (#49);
+                // the chip's Clear action also resets it to .empty.
+                await self.composeOrchestrator.handleDecision(decision, callId: callId, capture: self.attachedCapture)
             }
         case .deliver:
             // The model heard an affirmation and called deliver_prompt. Drive the
