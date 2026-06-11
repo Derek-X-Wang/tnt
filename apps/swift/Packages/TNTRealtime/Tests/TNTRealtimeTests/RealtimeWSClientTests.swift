@@ -117,4 +117,62 @@ final class RealtimeWSClientTests: XCTestCase {
 
         await client.disconnect()
     }
+
+    // MARK: - Reconnect re-configuration (issue #67)
+
+    func testReconnectReplaysStoredSessionConfig() async throws {
+        // A transparent reconnect creates a FRESH server session — without a
+        // config replay the next turn runs against defaults (server VAD on,
+        // no instructions, no tools). The client must re-send the stored
+        // session.update after reconnecting, before any later outbound event.
+        let transport = MockTransport()
+        let client = OpenAIRealtimeWSClient(apiKey: "sk-test", transport: transport, maxReconnectAttempts: 1)
+        try await client.connect()
+
+        let config = SessionUpdate(session: SessionUpdate.bilingualV0().session.withRewriteTools())
+        try await client.configureSession(config)
+        XCTAssertEqual(transport.sendLog.count, 1, "configureSession must send the config immediately")
+
+        // Trigger a receive failure → one transparent reconnect.
+        transport.enqueueText(#"{"type":"session.created"}"#)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        transport.enqueueError(RealtimeTransportError.streamClosed)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline && transport.sendLog.count < 2 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        XCTAssertEqual(transport.connectCount, 2, "must have reconnected once")
+        XCTAssertEqual(transport.sendLog.count, 2, "the stored session config must be re-sent after reconnect")
+        XCTAssertEqual(transport.sendLog[1], transport.sendLog[0], "re-sent config must match the initial one verbatim")
+
+        let json = try JSONSerialization.jsonObject(with: Data(transport.sendLog[1].utf8)) as? [String: Any]
+        XCTAssertEqual(json?["type"] as? String, "session.update")
+        let session = json?["session"] as? [String: Any]
+        XCTAssertEqual((session?["tools"] as? [[String: Any]])?.count, 2, "tools survive the reconnect")
+
+        await client.disconnect()
+    }
+
+    func testReconnectWithoutStoredConfigSendsNothing() async throws {
+        // No configureSession call → reconnect must not invent a send.
+        let transport = MockTransport()
+        let client = OpenAIRealtimeWSClient(apiKey: "sk-test", transport: transport, maxReconnectAttempts: 1)
+        try await client.connect()
+
+        transport.enqueueText(#"{"type":"session.created"}"#)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        transport.enqueueError(RealtimeTransportError.streamClosed)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline && transport.connectCount < 2 {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        XCTAssertEqual(transport.connectCount, 2)
+        XCTAssertEqual(transport.sendLog.count, 0)
+
+        await client.disconnect()
+    }
 }
