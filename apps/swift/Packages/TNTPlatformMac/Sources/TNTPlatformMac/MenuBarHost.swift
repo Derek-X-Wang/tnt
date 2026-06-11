@@ -57,7 +57,8 @@ public final class MenuBarHost {
         onReplaceAPIKey: MenuAction? = nil,
         onTestWSRoundtrip: MenuAction? = nil,
         onCheckForUpdates: MenuAction? = nil,
-        onClearContext: MenuAction? = nil
+        onClearContext: MenuAction? = nil,
+        onClearLastAppshot: MenuAction? = nil
     ) {
         self.state = initialState
         self.permissionStatus = permissionStatus
@@ -69,6 +70,7 @@ public final class MenuBarHost {
             testWSRoundtrip: onTestWSRoundtrip,
             checkForUpdates: onCheckForUpdates,
             clearContext: onClearContext,
+            clearLastAppshot: onClearLastAppshot,
             setState: nil
         )
         // Wire the debug-only state flipper after init so the closure can
@@ -259,8 +261,31 @@ public final class MenuBarHost {
         }
         menu.addItem(chipRow)
 
+        // Armed Appshots (M4a, #34): one row per appshot with a preview
+        // submenu (source app, window title, Window-Text snippet) — the
+        // ADR-0004 pre-send visibility surface for screen content.
+        for row in viewModel.appshotPreviewRows {
+            let item = NSMenuItem(title: "📸 \(row.appName)", action: nil, keyEquivalent: "")
+            let preview = NSMenu(title: "Appshot preview")
+            preview.addItem(Self.previewRow("App: \(row.appName)"))
+            if !row.windowTitle.isEmpty {
+                preview.addItem(Self.previewRow("Window: \(Self.truncate(row.windowTitle))"))
+            }
+            preview.addItem(Self.previewRow(row.windowTextSnippet.isEmpty
+                ? "Window Text: (none — text tier will report empty)"
+                : "Text: \(Self.truncate(row.windowTextSnippet))"))
+            if !row.hasImage {
+                preview.addItem(Self.previewRow("Image: none (text tier)"))
+            }
+            item.submenu = preview
+            menu.addItem(item)
+        }
+
         if !viewModel.isEmpty {
             forwarder.attachClearContextItem(into: menu)
+            if !viewModel.appshotPreviewRows.isEmpty {
+                forwarder.attachClearLastAppshotItem(into: menu)
+            }
         }
     }
 
@@ -290,6 +315,7 @@ private final class MenuActionForwarder: NSObject {
     private let testWSRoundtripAction: MenuBarHost.MenuAction?
     private let checkForUpdatesAction: MenuBarHost.MenuAction?
     private let clearContextAction: MenuBarHost.MenuAction?
+    private let clearLastAppshotAction: MenuBarHost.MenuAction?
     var setStateAction: ((AppState) -> Void)?
 
     init(
@@ -299,6 +325,7 @@ private final class MenuActionForwarder: NSObject {
         testWSRoundtrip: MenuBarHost.MenuAction?,
         checkForUpdates: MenuBarHost.MenuAction?,
         clearContext: MenuBarHost.MenuAction?,
+        clearLastAppshot: MenuBarHost.MenuAction?,
         setState: ((AppState) -> Void)?
     ) {
         self.openSettingsAction = openSettings
@@ -307,7 +334,23 @@ private final class MenuActionForwarder: NSObject {
         self.testWSRoundtripAction = testWSRoundtrip
         self.checkForUpdatesAction = checkForUpdates
         self.clearContextAction = clearContext
+        self.clearLastAppshotAction = clearLastAppshot
         self.setStateAction = setState
+    }
+
+    func attachClearLastAppshotItem(into menu: NSMenu) {
+        guard clearLastAppshotAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Clear Last Appshot",
+            action: #selector(clearLastAppshot(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func clearLastAppshot(_ sender: NSMenuItem) {
+        clearLastAppshotAction?()
     }
 
     func attachClearContextItem(into menu: NSMenu) {
