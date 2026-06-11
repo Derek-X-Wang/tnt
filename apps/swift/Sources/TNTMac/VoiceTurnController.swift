@@ -84,6 +84,25 @@ final class VoiceTurnController {
     /// (#49: AccessibilityClient.captureNow). Nil = no capture wired.
     private let captureContext: (@MainActor () -> CaptureSet)?
 
+    /// Text-only Appshot capture (M4a, #34), injected from the composition
+    /// root (AppshotCapturer.captureNow). Nil = appshot arming not wired.
+    private let captureAppshot: (@MainActor () -> Appshot?)?
+
+    /// Armed-Appshot lifecycle (#104): store + frozen-precedence merge.
+    /// The coordinator's chip callback is the single path that updates
+    /// `attachedCapture`, so armed Appshots persist across turns and idle
+    /// resets (ADR-0004: in-memory screen content is never invisible).
+    private lazy var armingCoordinator = AppshotArmingCoordinator(
+        capture: { [weak self] in
+            guard let self, let captureAppshot = self.captureAppshot else { return nil }
+            return captureAppshot()
+        },
+        onChipUpdate: { [weak self] merged in
+            self?.attachedCapture = merged
+            self?.menuBarHost?.setCaptureSet(merged)
+        }
+    )
+
     /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
     /// send/event hooks can reference `self` after init completes.
     private lazy var composeOrchestrator = ComposeOrchestrator(
@@ -130,7 +149,8 @@ final class VoiceTurnController {
         voice: String = "marin",
         compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String,
         promptDeliverer: PromptDeliverer,
-        captureContext: (@MainActor () -> CaptureSet)? = nil
+        captureContext: (@MainActor () -> CaptureSet)? = nil,
+        captureAppshot: (@MainActor () -> Appshot?)? = nil
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
@@ -138,6 +158,7 @@ final class VoiceTurnController {
         self.composeFunc = compose
         self.promptDeliverer = promptDeliverer
         self.captureContext = captureContext
+        self.captureAppshot = captureAppshot
         self.audio = RealtimeAudioSession()
     }
 
@@ -155,7 +176,11 @@ final class VoiceTurnController {
     /// is suppressed once, then resumes (the #52 acceptance promise).
     func clearAttachedCapture() {
         captureSuppressedForNextTurn = true
-        setAttachedCapture(.empty)
+        // Clearing the chip MUST clear the armed store too — it holds screen
+        // content in memory (ADR-0004). Order: clear armed, then reset fresh
+        // scalars; the coordinator's chip callback emits the final state.
+        armingCoordinator.clearAll()
+        armingCoordinator.setFreshContext(.empty)
     }
 
     /// Turn-start capture (#49): grab the frontmost window context at the
@@ -166,10 +191,13 @@ final class VoiceTurnController {
         if captureSuppressedForNextTurn {
             captureSuppressedForNextTurn = false
             TNTLog.voice.info("captureAtTurnStart: suppressed by Clear Context — turn goes out context-free")
+            armingCoordinator.setFreshContext(.empty)
             return
         }
         let capture = captureContext()
-        setAttachedCapture(capture)
+        // Through the coordinator so armed Appshots are merged, never
+        // clobbered (frozen-context precedence, #104).
+        armingCoordinator.setFreshContext(capture)
         // Field-level summary (no content) so "why is my context empty/partial"
         // is diagnosable per-app — AX exposure varies wildly between apps.
         let summary = capture.isEmpty ? "empty" : [
@@ -179,6 +207,19 @@ final class VoiceTurnController {
             "project=\(capture.project?.name ?? "nil")",
         ].joined(separator: " · ")
         TNTLog.voice.info("captureAtTurnStart: \(summary, privacy: .public)")
+    }
+
+    // MARK: - Appshot arming (M4a, #34)
+
+    /// Appshot Hotkey pressed (⌃⌥⇧Space): capture + arm + chip update.
+    func handleAppshotHotkey() {
+        TNTLog.voice.info("appshotHotkey: capture + arm")
+        armingCoordinator.handleHotkeyPress()
+    }
+
+    /// Capture Chip "Clear Last Appshot" action.
+    func clearLastAppshot() {
+        armingCoordinator.clearLast()
     }
 
     // MARK: - Pre-warm
@@ -475,11 +516,12 @@ final class VoiceTurnController {
                 default:
                     break
                 }
-                // Turn over (delivered / declined / errored): the context was
-                // either consumed or abandoned — reset the chip so it never
-                // shows stale context between turns (#49 clear-lifecycle).
+                // Turn over (delivered / declined / errored): reset the fresh
+                // scalars so stale window context never leaks into the next
+                // turn — but armed Appshots PERSIST until consumed or cleared
+                // (CONTEXT.md amendment, PR #97) and stay chip-visible.
                 if state == .idle {
-                    setAttachedCapture(.empty)
+                    armingCoordinator.setFreshContext(.empty)
                 }
             case .startCapture:
                 framesThisTurn = 0

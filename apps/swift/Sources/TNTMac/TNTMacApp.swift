@@ -100,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onClearContext: { [weak self] in
                 self?.voiceTurnController?.clearAttachedCapture()
+            },
+            onClearLastAppshot: { [weak self] in
+                self?.voiceTurnController?.clearLastAppshot()
             }
         )
         self.menuBarHost = menu
@@ -132,6 +135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // first capture (never at launch); untrusted → empty Capture Set.
             captureContext: { [accessibilityClient = AccessibilityClient()] in
                 accessibilityClient.captureNow()
+            },
+            // Text-only Appshot capture (M4a, #34): Window Text + frozen
+            // labels, no image, no Screen Recording TCC.
+            captureAppshot: { [appshotCapturer = AppshotCapturer()] in
+                appshotCapturer.captureNow()
             }
         )
         self.voiceTurnController = voiceController
@@ -161,13 +169,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 #endif
 
-        let host = HotkeyHost(chord: chord) { [weak self, weak menu] event in
+        let host = HotkeyHost(
+            chord: chord,
+            appshotChord: HotkeyChord.loadAppshot()
+        ) { [weak self, weak menu] event in
             guard let menu else { return }
             switch event {
             case .startListening:
                 Task { await self?.voiceTurnController?.startListening() }
             case .stopListening:
                 Task { await self?.voiceTurnController?.stopListening() }
+            case .captureAppshot:
+                self?.voiceTurnController?.handleAppshotHotkey()
             case .permissionChanged(let auth):
                 menu.setPermissionStatus(auth == .granted ? .ok : .inputMonitoringRequired)
             }

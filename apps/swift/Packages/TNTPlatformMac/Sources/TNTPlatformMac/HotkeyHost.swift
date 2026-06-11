@@ -30,6 +30,8 @@ public final class HotkeyHost {
     public enum Event: Sendable, Equatable {
         case startListening
         case stopListening
+        /// Single press of the Appshot Hotkey (M4a, #34) — capture + arm.
+        case captureAppshot
         case permissionChanged(Authorization)
     }
 
@@ -38,7 +40,15 @@ public final class HotkeyHost {
     public private(set) var authorization: Authorization = .unknown
     public private(set) var chord: HotkeyChord
 
+    /// Optional second chord (M4a, #34): the Appshot Hotkey (default
+    /// ⌃⌥⇧Space). Press-only — one keyDown, one capture; no hold/tap.
+    /// Shares the single CGEventTap with the voice chord; chord matching
+    /// is exact-modifier, so the shift superset never triggers the voice
+    /// chord and vice versa.
+    public private(set) var appshotChord: HotkeyChord?
+
     private var recognizer: HotkeyGestureRecognizer
+    private var appshotRecognizer = AppShotHotkeyGestureRecognizer()
     private let listener: Listener
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -46,10 +56,12 @@ public final class HotkeyHost {
 
     public init(
         chord: HotkeyChord,
+        appshotChord: HotkeyChord? = nil,
         configuration: HotkeyGestureRecognizer.Configuration = .init(),
         listener: @escaping Listener
     ) {
         self.chord = chord
+        self.appshotChord = appshotChord
         self.recognizer = HotkeyGestureRecognizer(configuration: configuration)
         self.listener = listener
     }
@@ -143,6 +155,25 @@ public final class HotkeyHost {
     // MARK: - Event handling (called on MainActor)
 
     fileprivate func handleEvent(type: CGEventType, timestamp: TimeInterval, flags: CGEventFlags, keyCode: UInt16) {
+        // Appshot chord first: it is the more-specific chord (shift superset
+        // of the voice chord). Exact-modifier matching means a matched
+        // appshot keyDown can never also be a voice keyDown — consume it.
+        if let appshotChord {
+            if type == .keyDown, appshotChord.matchesKeyDown(flags: flags, keyCode: keyCode) {
+                let effect = appshotRecognizer.keyDown()
+                TNTLog.hotkey.info("appshot keyDown effect=\(String(describing: effect), privacy: .public)")
+                if effect == .captureAppshot {
+                    listener(.captureAppshot)
+                }
+                return
+            }
+            if type == .keyUp, appshotChord.matchesKeyUp(keyCode: keyCode) {
+                // Reset the press-only recognizer; the voice recognizer also
+                // sees this keyUp below (shared Space key) and safely no-ops
+                // unless its own gesture is open.
+                _ = appshotRecognizer.keyUp()
+            }
+        }
         // Match policy lives on `HotkeyChord` (pure + unit-tested): a
         // keyDown needs the full chord to *open* a gesture; a keyUp needs
         // only the key to *close* one, because the modifier is often
