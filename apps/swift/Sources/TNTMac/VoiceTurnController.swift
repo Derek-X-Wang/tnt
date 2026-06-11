@@ -518,6 +518,11 @@ final class VoiceTurnController {
                 // After fco + rc emitted, arm the route suppression (the fco response.done
                 // arrives next; the route clears it so the spoken-answer done reaches the flow).
             }
+        case .analyzeScreen:
+            // M4b Tier-2 vision path. VisionOrchestrator will be wired in the HITL
+            // issue; for now this is a no-op in the app layer (the pure orchestrator
+            // logic lives in TNTPlatformMac issue #126, tested independently).
+            TNTLog.voice.info("toolCall: analyze_screen — M4b VisionOrchestrator not yet wired (pending HITL)")
         case .ignore:
             TNTLog.voice.info("toolCall: \(name, privacy: .public) ignored (unknown tool or undecodable args)")
         }

@@ -141,4 +141,53 @@ final class DesiredSessionConfigTests: XCTestCase {
         XCTAssertEqual(body.tools?.count, 1)
         XCTAssertEqual(body.tools?[0].name, "read_screen_text")
     }
+
+    // MARK: - visionEnabled=false: byte-identical to M4a (golden)
+
+    func testVisionDisabledProducesSameToolsAsM4a() {
+        // visionEnabled defaults to false — must be byte-identical to M4a call sites.
+        let c0 = desiredSessionConfig(voice: "marin", armedAppshotCount: 0)
+        let c1 = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: false)
+        let tools0 = c0.session.tools ?? []
+        let tools1 = c1.session.tools ?? []
+        XCTAssertEqual(tools0.map(\.name), tools1.map(\.name),
+            "visionEnabled:false must produce identical tool list to M4a (no visionEnabled arg)")
+    }
+
+    func testVisionEnabledAppendsAnalyzeScreenAfterReadScreenText() {
+        let config = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: true)
+        let tools = config.session.tools ?? []
+        XCTAssertEqual(tools.count, 4,
+            "visionEnabled:true must add analyze_screen: compose + deliver + read_screen_text + analyze_screen")
+        XCTAssertEqual(tools[0].name, "compose_agent_prompt")
+        XCTAssertEqual(tools[1].name, "deliver_prompt")
+        XCTAssertEqual(tools[2].name, "read_screen_text")
+        XCTAssertEqual(tools[3].name, "analyze_screen",
+            "analyze_screen must be appended AFTER read_screen_text (escalation tier)")
+    }
+
+    func testVisionEnabledGoldenIdentical() throws {
+        // Two identical calls with visionEnabled:true must produce byte-identical JSON.
+        let c1 = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: true)
+        let c2 = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertEqual(try encoder.encode(c1), try encoder.encode(c2),
+            "Identical inputs (visionEnabled:true) must produce byte-identical JSON")
+    }
+
+    func testVisionEnabledDiffersFromVisionDisabled() throws {
+        let cNo = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: false)
+        let cYes = desiredSessionConfig(voice: "marin", armedAppshotCount: 0, visionEnabled: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        XCTAssertNotEqual(try encoder.encode(cNo), try encoder.encode(cYes),
+            "visionEnabled:true and visionEnabled:false must produce different JSON (extra tool)")
+    }
+
+    func testWithVisionToolsStillWorks() {
+        let body = SessionUpdate.bilingualV0().session.withVisionTools()
+        XCTAssertEqual(body.tools?.count, 1)
+        XCTAssertEqual(body.tools?[0].name, "analyze_screen")
+    }
 }

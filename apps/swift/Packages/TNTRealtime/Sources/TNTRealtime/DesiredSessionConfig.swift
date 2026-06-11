@@ -30,10 +30,14 @@ import Foundation
 ///   - voice: The TTS voice identifier (e.g. `"marin"`). Reads from BYOK config.
 ///   - armedAppshotCount: The number of currently armed Appshots. When > 0,
 ///     `armedAppshotsContextNote(count:)` is appended to the system instructions.
+///   - visionEnabled: When `true`, the M4b `analyze_screen` tool is appended
+///     after `read_screen_text` (composable registration per ADR-0006).
+///     Defaults to `false` so M4a call sites are byte-identical to before.
 /// - Returns: A fully composed `SessionUpdate` ready to send.
 public func desiredSessionConfig(
     voice: String = "marin",
-    armedAppshotCount: Int = 0
+    armedAppshotCount: Int = 0,
+    visionEnabled: Bool = false
 ) -> SessionUpdate {
     var instructions = RealtimePrompts.v0System
 
@@ -55,9 +59,14 @@ public func desiredSessionConfig(
     )
 
     // Compose tools: Rewrite pair + Tier-1 screen tool.
-    let body = base.session
+    // When visionEnabled, also append the Tier-2 analyze_screen tool (M4b).
+    var body = base.session
         .withRewriteTools()
         .withScreenTools()
+
+    if visionEnabled {
+        body = body.withVisionTools()
+    }
 
     return SessionUpdate(session: body)
 }
