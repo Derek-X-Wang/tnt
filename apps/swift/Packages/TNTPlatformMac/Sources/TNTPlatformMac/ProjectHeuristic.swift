@@ -4,7 +4,9 @@
 //
 // v0 supports five app families:
 //   VS Code / Cursor: "file.swift — tnt" or "● file.swift — tnt — Workspace"
-//   Zed:             "file.swift — tnt" (em-dash, same format as VS Code)
+//   Zed:             "tnt — file.swift" (em-dash; project is FIRST segment as
+//                    observed live — opposite of #94's assumed order, corrected
+//                    in #117)
 //   JetBrains IDEs:  "tnt – src/Main.kt" (en-dash separator)
 //   Terminal / iTerm2: "user@host: ~/path/tnt" or "/Users/user/path/tnt"
 //   Unknown / unparseable → nil (no crash, no garbage ProjectRef)
@@ -112,14 +114,27 @@ private func vscodeProject(from title: String) -> ProjectRef? {
 
 // MARK: - Zed strategy
 
-/// Zed title format:
-///   `"main.swift — tnt"` → name = "tnt"
+/// Zed title format (observed live, corrected in #117):
+///   `"tnt — main.swift"` → name = "tnt"
+///   `"kitcn — .mcp.json"` → name = "kitcn"  (dotfile never chosen)
 ///   `"Zed"` (welcome screen / no project open) → nil
 ///
-/// Zed uses the same em-dash ` — ` (U+2014) separator as VS Code, with the
-/// project name as the second segment. When no file is open (welcome screen
-/// or untitled buffer without a project), there is no separator and the
-/// function returns nil — matching the "no project" observed live:
+/// Observed live format is `{project} — {filename}` (U+2014 em-dash), with
+/// the project name as the FIRST segment. Issue #94 assumed the reverse; #117
+/// corrects based on maintainer's running Zed.
+///
+/// Selection heuristic: prefer the segment that does NOT look like a filename —
+/// i.e. has no leading dot AND no file extension. This makes the function robust
+/// to either order should Zed's format differ across versions. When both or
+/// neither segment looks like a filename, the first segment wins (matches the
+/// observed current layout where the project always comes first).
+///
+/// "Looks like a filename" means: has a leading dot (dotfile) OR contains a
+/// dot that is not the first character (extension). Single-component names
+/// without a dot are treated as project names.
+///
+/// When no file is open (welcome screen or untitled buffer without a project),
+/// there is no separator and the function returns nil — matching:
 ///   `captureAtTurnStart: Zed · title=yes · selection=nil · project=nil`
 ///
 /// Note: Zed also omits AXSelectedText — that limitation is tracked separately
@@ -132,8 +147,32 @@ private func zedProject(from title: String) -> ProjectRef? {
     // Titles without a separator (e.g. "Zed", "untitled") carry no project.
     guard parts.count >= 2 else { return nil }
 
-    // Project name is the second segment.
-    let name = parts[1]
+    let first = parts[0]
+    let second = parts[1]
+    guard !first.isEmpty else { return nil }
+
+    // A segment "looks like a filename" if it has a leading dot (dotfile) or
+    // contains a dot anywhere after the first character (extension present).
+    func looksLikeFilename(_ s: String) -> Bool {
+        if s.hasPrefix(".") { return true }            // dotfile: ".mcp.json", ".gitignore"
+        if let dotIdx = s.firstIndex(of: "."),
+           dotIdx != s.startIndex { return true }      // extension: "main.swift", "README.md"
+        return false
+    }
+
+    let firstIsFilename = looksLikeFilename(first)
+    let secondIsFilename = looksLikeFilename(second)
+
+    // Pick the segment that does NOT look like a filename.
+    // If both or neither qualify, default to the first segment (observed layout).
+    let name: String
+    if firstIsFilename && !secondIsFilename {
+        name = second
+    } else {
+        // first is not a filename (or both are / neither is) → first segment wins
+        name = first
+    }
+
     guard !name.isEmpty else { return nil }
     return ProjectRef(name: name)
 }
