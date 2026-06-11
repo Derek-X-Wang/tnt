@@ -9,6 +9,7 @@
 // same `NSStatusItem`; M2 layers Worker Agent presence indicators.
 
 import AppKit
+import TNTCore
 
 @MainActor
 public final class MenuBarHost {
@@ -39,6 +40,12 @@ public final class MenuBarHost {
     /// row in the menu when non-nil.
     public private(set) var lastErrorMessage: String?
 
+    /// The Capture Set currently attached to the next Voice Turn,
+    /// rendered as the **Capture Chip** (issue #52). Display strings come
+    /// from the pure `CaptureChipViewModel` (#81); the raw set is kept for
+    /// the preview rows (window title, selection snippet, workspace path).
+    public private(set) var attachedCapture: CaptureSet = .empty
+
     private let statusItem: NSStatusItem
     private let forwarder: MenuActionForwarder
 
@@ -49,7 +56,8 @@ public final class MenuBarHost {
         onRetryInputMonitoring: MenuAction? = nil,
         onReplaceAPIKey: MenuAction? = nil,
         onTestWSRoundtrip: MenuAction? = nil,
-        onCheckForUpdates: MenuAction? = nil
+        onCheckForUpdates: MenuAction? = nil,
+        onClearContext: MenuAction? = nil
     ) {
         self.state = initialState
         self.permissionStatus = permissionStatus
@@ -60,6 +68,7 @@ public final class MenuBarHost {
             replaceAPIKey: onReplaceAPIKey,
             testWSRoundtrip: onTestWSRoundtrip,
             checkForUpdates: onCheckForUpdates,
+            clearContext: onClearContext,
             setState: nil
         )
         // Wire the debug-only state flipper after init so the closure can
@@ -90,6 +99,14 @@ public final class MenuBarHost {
     public func setLastErrorMessage(_ message: String?) {
         guard lastErrorMessage != message else { return }
         lastErrorMessage = message
+        rebuild()
+    }
+
+    /// Push the Capture Set attached to the next Voice Turn so the
+    /// Capture Chip reflects it. Pass `.empty` to show the no-context state.
+    public func setCaptureSet(_ capture: CaptureSet) {
+        guard attachedCapture != capture else { return }
+        attachedCapture = capture
         rebuild()
     }
 
@@ -165,6 +182,8 @@ public final class MenuBarHost {
             menu.addItem(banner)
         }
 
+        appendCaptureChip(into: menu)
+
         menu.addItem(NSMenuItem.separator())
 
         forwarder.attachReplaceAPIKeyItem(into: menu)
@@ -182,9 +201,80 @@ public final class MenuBarHost {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(forwarder.makeDebugStateMenuItem())
         forwarder.attachTestWSRoundtripItem(into: menu)
+        forwarder.attachDebugSampleContextItem(into: menu)
 #endif
 
         return menu
+    }
+
+#if DEBUG
+    /// DEBUG-only hook so the Capture Chip's preview + clear paths can be
+    /// dogfooded before live AX capture (#49) exists. Set by the app delegate
+    /// to push a sample CaptureSet through the same controller path the real
+    /// capture will use.
+    public var debugAttachSampleContext: MenuAction? {
+        get { forwarder.debugSampleContextAction }
+        set {
+            forwarder.debugSampleContextAction = newValue
+            // The menu was built at init, before the app delegate assigns this
+            // closure — rebuild so the debug item's nil-guard re-evaluates.
+            rebuild()
+        }
+    }
+#endif
+
+    /// The **Capture Chip** section (issue #52): one summary row (via the
+    /// pure #81 view-model), a preview submenu exposing exactly what will be
+    /// sent (privacy-visibility surface per CONTEXT.md), and a Clear action.
+    /// Empty state renders the "No context" row with no actions.
+    private func appendCaptureChip(into menu: NSMenu) {
+        menu.addItem(NSMenuItem.separator())
+
+        let viewModel = CaptureChipViewModel(capture: attachedCapture)
+        let chipRow = NSMenuItem(title: "📎 \(viewModel.summary)", action: nil, keyEquivalent: "")
+        chipRow.isEnabled = false
+
+        if !viewModel.isEmpty {
+            // Preview: the user sees exactly what's about to be attached
+            // BEFORE speaking — this pre-send visibility is what makes
+            // capture privacy-defensible (CONTEXT.md → Capture Chip).
+            let preview = NSMenu(title: "Context preview")
+            if let app = attachedCapture.appName {
+                preview.addItem(Self.previewRow("App: \(app)"))
+            }
+            if let title = attachedCapture.windowTitle {
+                preview.addItem(Self.previewRow("Window: \(Self.truncate(title))"))
+            }
+            if let selection = attachedCapture.selectedText, !selection.isEmpty {
+                preview.addItem(Self.previewRow("Selection: \(Self.truncate(selection))"))
+            }
+            if let project = attachedCapture.project {
+                preview.addItem(Self.previewRow("Project: \(project.name)"))
+                if let path = project.path {
+                    preview.addItem(Self.previewRow("Workspace: \(Self.truncate(path))"))
+                }
+            }
+            chipRow.submenu = preview
+            chipRow.isEnabled = true
+        }
+        menu.addItem(chipRow)
+
+        if !viewModel.isEmpty {
+            forwarder.attachClearContextItem(into: menu)
+        }
+    }
+
+    private static func previewRow(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    /// Keep preview rows readable — menu items shouldn't wrap or run wide.
+    private static func truncate(_ text: String, max: Int = 60) -> String {
+        let flattened = text.replacingOccurrences(of: "\n", with: " ")
+        guard flattened.count > max else { return flattened }
+        return String(flattened.prefix(max)) + "…"
     }
 }
 
@@ -199,6 +289,7 @@ private final class MenuActionForwarder: NSObject {
     private let replaceAPIKeyAction: MenuBarHost.MenuAction?
     private let testWSRoundtripAction: MenuBarHost.MenuAction?
     private let checkForUpdatesAction: MenuBarHost.MenuAction?
+    private let clearContextAction: MenuBarHost.MenuAction?
     var setStateAction: ((AppState) -> Void)?
 
     init(
@@ -207,6 +298,7 @@ private final class MenuActionForwarder: NSObject {
         replaceAPIKey: MenuBarHost.MenuAction?,
         testWSRoundtrip: MenuBarHost.MenuAction?,
         checkForUpdates: MenuBarHost.MenuAction?,
+        clearContext: MenuBarHost.MenuAction?,
         setState: ((AppState) -> Void)?
     ) {
         self.openSettingsAction = openSettings
@@ -214,7 +306,23 @@ private final class MenuActionForwarder: NSObject {
         self.replaceAPIKeyAction = replaceAPIKey
         self.testWSRoundtripAction = testWSRoundtrip
         self.checkForUpdatesAction = checkForUpdates
+        self.clearContextAction = clearContext
         self.setStateAction = setState
+    }
+
+    func attachClearContextItem(into menu: NSMenu) {
+        guard clearContextAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Clear Context",
+            action: #selector(clearContext(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func clearContext(_ sender: NSMenuItem) {
+        clearContextAction?()
     }
 
     func attachReplaceAPIKeyItem(into menu: NSMenu) {
@@ -248,6 +356,8 @@ private final class MenuActionForwarder: NSObject {
     }
 
 #if DEBUG
+    var debugSampleContextAction: MenuBarHost.MenuAction?
+
     func attachTestWSRoundtripItem(into menu: NSMenu) {
         guard testWSRoundtripAction != nil else { return }
         let item = NSMenuItem(
@@ -261,6 +371,21 @@ private final class MenuActionForwarder: NSObject {
 
     @objc func testWSRoundtrip(_ sender: NSMenuItem) {
         testWSRoundtripAction?()
+    }
+
+    func attachDebugSampleContextItem(into menu: NSMenu) {
+        guard debugSampleContextAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Debug: Attach Sample Context",
+            action: #selector(attachSampleContext(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc func attachSampleContext(_ sender: NSMenuItem) {
+        debugSampleContextAction?()
     }
 #endif
 
