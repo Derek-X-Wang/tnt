@@ -130,11 +130,12 @@ final class ToolCallDispatchTests: XCTestCase {
         }
     }
 
-    func testClassifyAppShotVisionToolReturnsIgnore() {
-        // A known-to-exist-but-different tool — should still be .ignore from dispatch perspective
-        let decision = classifyToolCall(name: "get_appshot", argumentsJSON: "{}")
+    func testClassifyUnknownFutureToolReturnsIgnore() {
+        // A genuinely unknown tool name — should always be .ignore.
+        // (Replaces the stale "get_appshot" fixture — that name no longer exists.)
+        let decision = classifyToolCall(name: "some_future_m5_tool", argumentsJSON: "{}")
         guard case .ignore = decision else {
-            XCTFail("Expected .ignore for get_appshot (not handled here), got \(decision)")
+            XCTFail("Expected .ignore for unknown future tool, got \(decision)")
             return
         }
     }
