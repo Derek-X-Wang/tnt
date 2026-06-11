@@ -206,4 +206,53 @@ final class ProjectHeuristicTests: XCTestCase {
         XCTAssertEqual(ref?.name, "repo~backup",
             "Embedded ~ after user@host strip must not be expanded")
     }
+
+    // MARK: - Zed (issue #94)
+
+    /// Zed's window title format is `{filename} — {project}` (U+2014 em-dash),
+    /// matching VS Code. The project name is the second em-dash-separated segment.
+    ///
+    ///   `"main.swift — tnt"` → name = "tnt"
+    func testZedSimpleTitle() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: "main.swift \u{2014} tnt"
+        )
+        XCTAssertEqual(ref?.name, "tnt")
+        XCTAssertNil(ref?.path)
+    }
+
+    /// Zed with a multi-word / hyphenated project name.
+    ///
+    ///   `"App.tsx — my-frontend"` → name = "my-frontend"
+    func testZedHyphenatedProjectName() {
+        let ref = projectRef(
+            appName: "Zed",
+            windowTitle: "App.tsx \u{2014} my-frontend"
+        )
+        XCTAssertEqual(ref?.name, "my-frontend")
+    }
+
+    /// Zed welcome screen / no project open — title is just "Zed" with no
+    /// em-dash separator, so no project can be derived.
+    func testZedWelcomeScreenNoProject() {
+        let ref = projectRef(appName: "Zed", windowTitle: "Zed")
+        XCTAssertNil(ref, "No em-dash separator in Zed welcome title — should return nil")
+    }
+
+    /// Zed with an untitled buffer has no file or project separator — should
+    /// return nil gracefully.
+    func testZedUntitledBufferReturnsNil() {
+        let ref = projectRef(appName: "Zed", windowTitle: "untitled")
+        XCTAssertNil(ref, "Untitled Zed buffer with no project separator must return nil")
+    }
+
+    /// Case-insensitive detection: "zed" lowercase matches the Zed app family.
+    func testZedLowercaseAppName() {
+        let ref = projectRef(
+            appName: "zed",
+            windowTitle: "README.md \u{2014} docs-project"
+        )
+        XCTAssertEqual(ref?.name, "docs-project")
+    }
 }

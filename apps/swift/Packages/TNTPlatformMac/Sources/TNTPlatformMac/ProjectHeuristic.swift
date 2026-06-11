@@ -2,8 +2,9 @@
 // from a frontmost window's app name + title. No AppKit, no Accessibility
 // tree walking — just string parsing so the logic is fully unit-testable.
 //
-// v0 supports four app families:
+// v0 supports five app families:
 //   VS Code / Cursor: "file.swift — tnt" or "● file.swift — tnt — Workspace"
+//   Zed:             "file.swift — tnt" (em-dash, same format as VS Code)
 //   JetBrains IDEs:  "tnt – src/Main.kt" (en-dash separator)
 //   Terminal / iTerm2: "user@host: ~/path/tnt" or "/Users/user/path/tnt"
 //   Unknown / unparseable → nil (no crash, no garbage ProjectRef)
@@ -32,6 +33,8 @@ public func projectRef(appName: String, windowTitle: String) -> ProjectRef? {
     switch true {
     case vsCodeFamily(app):
         return vscodeProject(from: title)
+    case zedFamily(app):
+        return zedProject(from: title)
     case jetbrainsFamily(app):
         return jetbrainsProject(from: title)
     case terminalFamily(app):
@@ -45,6 +48,10 @@ public func projectRef(appName: String, windowTitle: String) -> ProjectRef? {
 
 private func vsCodeFamily(_ app: String) -> Bool {
     app == "cursor" || app == "code" || app.contains("visual studio code")
+}
+
+private func zedFamily(_ app: String) -> Bool {
+    app == "zed"
 }
 
 private func jetbrainsFamily(_ app: String) -> Bool {
@@ -99,6 +106,34 @@ private func vscodeProject(from title: String) -> ProjectRef? {
         }
     }
     name = name.trimmingCharacters(in: .whitespaces)
+    guard !name.isEmpty else { return nil }
+    return ProjectRef(name: name)
+}
+
+// MARK: - Zed strategy
+
+/// Zed title format:
+///   `"main.swift — tnt"` → name = "tnt"
+///   `"Zed"` (welcome screen / no project open) → nil
+///
+/// Zed uses the same em-dash ` — ` (U+2014) separator as VS Code, with the
+/// project name as the second segment. When no file is open (welcome screen
+/// or untitled buffer without a project), there is no separator and the
+/// function returns nil — matching the "no project" observed live:
+///   `captureAtTurnStart: Zed · title=yes · selection=nil · project=nil`
+///
+/// Note: Zed also omits AXSelectedText — that limitation is tracked separately
+/// and is NOT in scope for this heuristic.
+private func zedProject(from title: String) -> ProjectRef? {
+    let separator = " \u{2014} " // " — " (U+2014 em-dash with spaces)
+    let parts = title.components(separatedBy: separator).map {
+        $0.trimmingCharacters(in: .whitespaces)
+    }
+    // Titles without a separator (e.g. "Zed", "untitled") carry no project.
+    guard parts.count >= 2 else { return nil }
+
+    // Project name is the second segment.
+    let name = parts[1]
     guard !name.isEmpty else { return nil }
     return ProjectRef(name: name)
 }
