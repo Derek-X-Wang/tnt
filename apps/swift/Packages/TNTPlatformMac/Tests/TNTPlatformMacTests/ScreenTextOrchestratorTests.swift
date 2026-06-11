@@ -98,11 +98,35 @@ final class ScreenTextOrchestratorTests: XCTestCase {
     }
 
     func testClassifyUnknownNameStillIgnore() {
-        let decision = classifyToolCall(name: "analyze_screen", argumentsJSON: "{}")
+        // analyze_screen is now a known tool (M4b); use a genuinely unknown name.
+        let decision = classifyToolCall(name: "some_future_m5_tool", argumentsJSON: "{}")
         guard case .ignore = decision else {
             XCTFail("Expected .ignore for unknown tool, got \(decision)")
             return
         }
+    }
+
+    func testClassifyAnalyzeScreenReturnsAnalyzeScreen() {
+        let decision = classifyToolCall(
+            name: "analyze_screen",
+            argumentsJSON: #"{"question":"what is in this design?"}"#
+        )
+        guard case .analyzeScreen(let args) = decision else {
+            XCTFail("Expected .analyzeScreen, got \(decision)")
+            return
+        }
+        XCTAssertEqual(args.question, "what is in this design?")
+    }
+
+    func testClassifyAnalyzeScreenMalformedStillReturnsAnalyzeScreen() {
+        // Even malformed args must yield .analyzeScreen (nil question) — active tool
+        // call must not be left unanswered, which would stall the Realtime turn.
+        let decision = classifyToolCall(name: "analyze_screen", argumentsJSON: "{{bad")
+        guard case .analyzeScreen(let args) = decision else {
+            XCTFail("Expected .analyzeScreen even for malformed JSON, got \(decision)")
+            return
+        }
+        XCTAssertNil(args.question)
     }
 
     // =========================================================================

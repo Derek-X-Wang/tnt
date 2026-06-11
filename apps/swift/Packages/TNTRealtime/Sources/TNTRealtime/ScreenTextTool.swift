@@ -18,7 +18,7 @@ import Foundation
 
 // MARK: - Tier-1 screen tool
 
-/// Factory for the M4a Tier-1 screen text tool.
+/// Factory for the M4a Tier-1 screen text tool and the M4b Tier-2 vision tool.
 public enum ScreenTextTool {
 
     /// The Realtime function tool that returns a Window-Text snapshot for a Voice Turn.
@@ -43,6 +43,36 @@ public enum ScreenTextTool {
                 "question": .object([
                     "type": .string("string"),
                     "description": .string("The user's question about what's on screen, passed verbatim (e.g. \"what's causing this error?\", \"summarize this document\").")
+                ])
+            ],
+            required: ["question"],
+            additionalProperties: false
+        )
+    )
+
+    // MARK: - Tier-2 vision tool (M4b)
+
+    /// The Realtime function tool that routes a screen question through the
+    /// vision-capable Cognitive Engine (M4b ESCALATION tier).
+    ///
+    /// The model must only call `analyze_screen` when `read_screen_text`
+    /// returned an empty/sparse/insufficient snapshot for the question.
+    /// This triggers a vision-model call (image + Window Text) via the
+    /// Cognitive Engine — more expensive and slower than Tier 1.
+    ///
+    /// Per ADR-0006 (amendment): composable registration — this tool is
+    /// appended AFTER `read_screen_text` in `withVisionTools()` so the
+    /// model sees Tier 1 first. Both tools are registered only when
+    /// `visionEnabled == true` in `desiredSessionConfig`.
+    public static let analyzeScreenTool: RealtimeTool = RealtimeTool(
+        name: "analyze_screen",
+        description: "ESCALATION tier — call this ONLY when read_screen_text's snapshot was empty, sparse, or insufficient to answer the question and the user needs a vision-capable answer. Routes image + Window Text through the vision Cognitive Engine. More expensive than read_screen_text.",
+        parameters: JSONValue.schema(
+            type: "object",
+            properties: [
+                "question": .object([
+                    "type": .string("string"),
+                    "description": .string("The user's question about what's on screen, passed verbatim.")
                 ])
             ],
             required: ["question"],
@@ -79,5 +109,16 @@ extension SessionUpdate.Body {
     /// `toolChoice` defaults to `"auto"`.
     public func withScreenTools(toolChoice: String = "auto") -> SessionUpdate.Body {
         appendingTools([ScreenTextTool.tool], toolChoice: toolChoice)
+    }
+
+    /// Returns a new `Body` with the M4b `analyze_screen` vision tool appended
+    /// AFTER `read_screen_text`. Per ADR-0006: composable registration — callers
+    /// first call `withScreenTools()` then chain this to add the escalation tier.
+    ///
+    /// Only call this when `visionEnabled == true` (i.e. Screen Recording TCC
+    /// has been granted). The model escalates from Tier 1 → Tier 2 based on
+    /// snapshot quality, never the other way around.
+    public func withVisionTools(toolChoice: String = "auto") -> SessionUpdate.Body {
+        appendingTools([ScreenTextTool.analyzeScreenTool], toolChoice: toolChoice)
     }
 }
