@@ -252,9 +252,11 @@ final class VoiceTurnController {
         do {
             // Register the M1 Rewrite tools on every connect so the model can
             // call compose_agent_prompt / deliver_prompt. withRewriteTools()
-            // returns a Body, so re-wrap it in a SessionUpdate.
+            // returns a Body, so re-wrap it in a SessionUpdate. Goes through
+            // configureSession (not a raw send) so the client can replay the
+            // config after a transparent reconnect (issue #67).
             let body = SessionUpdate.bilingualV0(voice: voice).session.withRewriteTools()
-            try await c.sendQueue.send(SessionUpdate(session: body))
+            try await c.configureSession(SessionUpdate(session: body))
         } catch {
             menuBarHost?.setLastErrorMessage("Could not configure session: \(error.localizedDescription)")
         }

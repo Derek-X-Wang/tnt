@@ -55,6 +55,12 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
     /// linearly by `VoiceTurnController.ensureConnection`).
     public let sendQueue: RealtimeSendQueue
 
+    /// The session configuration to replay after a transparent reconnect
+    /// (issue #67). A reconnect creates a FRESH server session — without a
+    /// replay the next Voice Turn runs against defaults: server VAD active,
+    /// no instructions, no tools. Set via `configureSession(_:)`.
+    private var storedSessionConfig: SessionUpdate?
+
     public init(
         apiKey: String,
         model: String = OpenAIRealtimeWSClient.defaultModel,
@@ -95,6 +101,15 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
             throw RealtimeWSError.transportFailed("could not utf8-encode outbound event")
         }
         try await transport.sendText(text)
+    }
+
+    /// Send the session configuration AND store it for replay after a
+    /// transparent reconnect (issue #67). Callers configure the session
+    /// through this method — not a raw `send` — so the client always knows
+    /// the config a recovered session must be restored to.
+    public func configureSession(_ update: SessionUpdate) async throws {
+        lock.withLock { storedSessionConfig = update }
+        try await sendQueue.send(update)
     }
 
     /// Build the upgrade request with all required headers including
@@ -141,6 +156,16 @@ public final class OpenAIRealtimeWSClient: RealtimeWSClient, @unchecked Sendable
                     do {
                         await transport.disconnect()
                         try await transport.connect(request: makeRequest())
+                        // The reconnected socket is a FRESH server session —
+                        // replay the stored config (modalities, turn_detection:
+                        // null, instructions, tools) before resuming, or the
+                        // next turn runs against server defaults (issue #67).
+                        // A failed replay is a failed reconnect: fall through
+                        // to the same fatal path rather than continuing into a
+                        // mis-configured session.
+                        if let config = lock.withLock({ storedSessionConfig }) {
+                            try await sendQueue.send(config)
+                        }
                         continue
                     } catch {
                         let message = (error as? RealtimeTransportError).map(String.init(describing:)) ?? error.localizedDescription
