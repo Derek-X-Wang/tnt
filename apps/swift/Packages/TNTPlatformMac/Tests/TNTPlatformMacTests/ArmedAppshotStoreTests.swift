@@ -348,6 +348,51 @@ final class ArmedAppshotStoreTests: XCTestCase {
         XCTAssertTrue(chipUpdates.isEmpty, "No chip update when capture fails")
     }
 
+    // MARK: - Coordinator: armExternal + consume (M4b, #127)
+
+    func testCoordinatorArmExternalArmsAndNotifiesChip() {
+        var chipUpdates: [CaptureSet] = []
+        let coordinator = AppshotArmingCoordinator(
+            capture: { nil },
+            onChipUpdate: { chipUpdates.append($0) }
+        )
+        coordinator.armExternal(makeAppshot(appName: "Cursor"))
+        XCTAssertEqual(coordinator.armedCount, 1,
+            "armExternal must arm the async-captured Appshot")
+        XCTAssertEqual(chipUpdates.count, 1)
+    }
+
+    func testCoordinatorArmExternalNilIsNoOp() {
+        var chipUpdates: [CaptureSet] = []
+        let coordinator = AppshotArmingCoordinator(
+            capture: { nil },
+            onChipUpdate: { chipUpdates.append($0) }
+        )
+        coordinator.armExternal(nil)
+        XCTAssertEqual(coordinator.armedCount, 0)
+        XCTAssertTrue(chipUpdates.isEmpty, "Nil capture must not touch the chip")
+    }
+
+    func testCoordinatorConsumeRemovesOnlyMatchingAndNotifiesChip() {
+        var chipUpdates: [CaptureSet] = []
+        let coordinator = AppshotArmingCoordinator(
+            capture: { nil },
+            onChipUpdate: { chipUpdates.append($0) }
+        )
+        let consumed = makeAppshot(appName: "Cursor")
+        let survives = makeAppshot(appName: "Arc")
+        coordinator.armExternal(consumed)
+        coordinator.armExternal(survives)
+        chipUpdates.removeAll()
+
+        coordinator.consume(ids: [consumed.id])
+
+        XCTAssertEqual(coordinator.armed.map(\.appName), ["Arc"],
+            "Consume must remove exactly the resolve-time ids — later arms survive")
+        XCTAssertEqual(chipUpdates.count, 1,
+            "Consume must refresh the chip so consumed rows disappear")
+    }
+
     // MARK: - ArmedAppshotStore.consume(ids:) — issue #126
 
     func testConsumeRemovesMatchingIds() {
