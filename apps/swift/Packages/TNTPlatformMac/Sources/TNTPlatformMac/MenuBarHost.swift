@@ -274,7 +274,17 @@ public final class MenuBarHost {
             preview.addItem(Self.previewRow(row.windowTextSnippet.isEmpty
                 ? "Window Text: (none — text tier will report empty)"
                 : "Text: \(Self.truncate(row.windowTextSnippet))"))
-            if !row.hasImage {
+            if let data = row.imageJPEG, let image = NSImage(data: data) {
+                // M4b (#128): thumbnail preview — the ADR-0004 pre-send
+                // visibility surface now covers the image tier too.
+                let thumb = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                let maxWidth: CGFloat = 220
+                let scale = min(1, maxWidth / max(image.size.width, 1))
+                image.size = NSSize(width: image.size.width * scale,
+                                    height: image.size.height * scale)
+                thumb.image = image
+                preview.addItem(thumb)
+            } else {
                 preview.addItem(Self.previewRow("Image: none (text tier)"))
             }
             item.submenu = preview
