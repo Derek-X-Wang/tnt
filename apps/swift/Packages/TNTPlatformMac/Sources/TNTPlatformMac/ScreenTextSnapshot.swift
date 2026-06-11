@@ -1,4 +1,4 @@
-// ScreenTextSnapshot — Tier-1 `function_call_output` payload builder for M4a.
+// ScreenTextSnapshot — Tier-1 `function_call_output` payload builder for M4a/M4b.
 //
 // Turns `(question, armed: [Appshot], current: Appshot?, visionAvailable, now)`
 // into the JSON string the Realtime model reads as the `read_screen_text`
@@ -9,12 +9,16 @@
 // no Cognitive Engine call, no image bytes. This builder is the single source
 // of truth for that JSON shape.
 //
-// Design constraints (issue #100):
+// Design constraints (issue #100 + #124):
 // - Pure: imports Foundation + TNTCore only; no AppKit, no ApplicationServices.
 // - Deterministic output via explicit `Encodable` conformance (stable key order).
 // - `visionAvailable: false` in M4a (no escalation hint; M4b flips to true).
 // - Total text budget ~8,000 chars across sources; head+tail truncation.
 // - Empty/sparse text is a valid snapshot — never an error.
+// - Issue #124 (M4b): `recommendedNextTool: String?` emitted via `encodeIfPresent`
+//   so `visionAvailable: false` output is byte-identical to existing goldens
+//   (field simply absent). Set to "analyze_screen" when visionAvailable == true
+//   AND every source is .empty or .sparse (or there are zero sources).
 
 import Foundation
 import TNTCore
@@ -100,11 +104,19 @@ public struct ScreenTextSnapshotSource: Encodable, Equatable, Sendable {
 ///
 /// Deterministic Encodable: keys are emitted in a fixed order so the output
 /// is byte-identical for identical inputs (golden-testable).
+///
+/// `recommendedNextTool` is emitted only when non-nil (via `encodeIfPresent`)
+/// so the `visionAvailable: false` output path stays byte-identical to
+/// existing goldens — the field is simply absent in M4a output.
 public struct ScreenTextSnapshot: Encodable, Equatable, Sendable {
 
     public let kind: String
     public let version: Int
     public let question: String?
+    /// Escalation hint (issue #124): set to `"analyze_screen"` when
+    /// `visionAvailable == true` and every source is `.empty` or `.sparse`
+    /// (or there are zero sources). Nil and omitted from JSON otherwise.
+    public let recommendedNextTool: String?
     public let sources: [ScreenTextSnapshotSource]
     public let fullVisionAvailable: Bool
     public let instruction: String
@@ -113,13 +125,26 @@ public struct ScreenTextSnapshot: Encodable, Equatable, Sendable {
         case kind
         case version
         case question
+        case recommendedNextTool
         case sources
         case fullVisionAvailable
         case instruction
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(version, forKey: .version)
+        try container.encodeIfPresent(question, forKey: .question)
+        try container.encodeIfPresent(recommendedNextTool, forKey: .recommendedNextTool)
+        try container.encode(sources, forKey: .sources)
+        try container.encode(fullVisionAvailable, forKey: .fullVisionAvailable)
+        try container.encode(instruction, forKey: .instruction)
+    }
+
     public init(
         question: String?,
+        recommendedNextTool: String?,
         sources: [ScreenTextSnapshotSource],
         fullVisionAvailable: Bool,
         instruction: String
@@ -127,8 +152,10 @@ public struct ScreenTextSnapshot: Encodable, Equatable, Sendable {
         self.kind = "screen_text_snapshot"
         // v2 (#119): mixed armed+current sources, per-source kind labels,
         // capturedSecondsAgo, name-your-source instruction.
+        // #124: adds optional recommendedNextTool escalation hint (same shape family).
         self.version = 2
         self.question = question
+        self.recommendedNextTool = recommendedNextTool
         self.sources = sources
         self.fullVisionAvailable = fullVisionAvailable
         self.instruction = instruction
@@ -195,8 +222,16 @@ public struct ScreenTextSnapshotBuilder {
             armed.map { ($0, .armedAppshot) } + (current.map { [($0, .freshGrab)] } ?? [])
         let sources = buildSources(entries: entries, now: now)
         let instruction = buildInstruction(visionAvailable: visionAvailable)
+        // Issue #124: emit escalation hint only when visionAvailable and every
+        // source is empty/sparse (or there are no sources at all). The field is
+        // omitted from JSON when nil, so M4a output stays byte-identical.
+        let recommendedNextTool = buildRecommendedNextTool(
+            visionAvailable: visionAvailable,
+            sources: sources
+        )
         return ScreenTextSnapshot(
             question: question,
+            recommendedNextTool: recommendedNextTool,
             sources: sources,
             fullVisionAvailable: visionAvailable,
             instruction: instruction
@@ -294,6 +329,27 @@ public struct ScreenTextSnapshotBuilder {
         if trimmed.isEmpty { return .empty }
         if trimmed.count < 30 { return .sparse }
         return .ok
+    }
+
+    /// Returns `"analyze_screen"` when `visionAvailable == true` AND all sources
+    /// are `.empty` or `.sparse` (or there are no sources at all). Returns nil
+    /// otherwise, causing the field to be omitted from the JSON output.
+    ///
+    /// Design: this is a hint to the Realtime model that it should call
+    /// `analyze_screen` next rather than try to answer from window text alone.
+    /// The hint is suppressed whenever any source has `.ok` quality, because
+    /// window text is sufficient in that case.
+    private static func buildRecommendedNextTool(
+        visionAvailable: Bool,
+        sources: [ScreenTextSnapshotSource]
+    ) -> String? {
+        guard visionAvailable else { return nil }
+        // Zero sources → no window text at all → escalate.
+        // Any .ok source → window text is sufficient → no hint.
+        let allEmptyOrSparse = sources.allSatisfy {
+            $0.textQuality == .empty || $0.textQuality == .sparse
+        }
+        return allEmptyOrSparse ? "analyze_screen" : nil
     }
 
     private static func buildInstruction(visionAvailable: Bool) -> String {
