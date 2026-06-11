@@ -156,11 +156,33 @@ final class CaptureChipViewModelAppshotTests: XCTestCase {
         )
     }
 
-    func testPreviewRowsHasImageFalseInM4a() {
+    func testPreviewRowsHasImageFalseWhenNoImageData() {
+        // Text-only appshot (M4a) — imageJPEG nil → hasImage false.
         let appshot = makeAppshot(appName: "Cursor")
         let vm = CaptureChipViewModel(capture: captureWithAppshots([appshot]))
+        XCTAssertNil(vm.appshotPreviewRows[0].imageJPEG,
+            "Text-only appshot must yield nil imageJPEG in preview row")
         XCTAssertFalse(vm.appshotPreviewRows[0].hasImage,
-            "hasImage must be false in M4a — image tier arrives in M4b")
+            "hasImage must be false when imageJPEG is nil")
+    }
+
+    func testPreviewRowsHasImageTrueWhenAppshotHasImageData() {
+        // M4b path: appshot has imageJPEG → row carries bytes, hasImage true.
+        let imageData = Data([0xFF, 0xD8, 0xFF, 0xE0])
+        let appshot = Appshot(imageJPEG: imageData, windowText: "some text", appName: "Arc", windowTitle: "window")
+        let vm = CaptureChipViewModel(capture: captureWithAppshots([appshot]))
+        XCTAssertEqual(vm.appshotPreviewRows[0].imageJPEG, imageData,
+            "Row must carry the exact JPEG bytes from the Appshot")
+        XCTAssertTrue(vm.appshotPreviewRows[0].hasImage,
+            "hasImage must be true when imageJPEG is non-nil (M4b)")
+    }
+
+    func testPreviewRowImageJPEGNilForTextOnlyAppshot() {
+        let appshot = Appshot(windowText: "hello world", appName: "Editor", windowTitle: "notes.txt")
+        let vm = CaptureChipViewModel(capture: captureWithAppshots([appshot]))
+        XCTAssertNil(vm.appshotPreviewRows[0].imageJPEG,
+            "imageJPEG must be nil in the row when the Appshot has no image")
+        XCTAssertFalse(vm.appshotPreviewRows[0].hasImage)
     }
 
     func testPreviewRowsAreInArmedOrder() {
