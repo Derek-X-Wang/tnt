@@ -82,7 +82,19 @@ public final class LocalOpenAIEngine: CognitiveEngine, @unchecked Sendable {
         return try await callCompletions(messages: messages)
     }
 
-    // MARK: - Private
+    public func answerAboutScreen(
+        question: String,
+        appshots: [Appshot]
+    ) async throws -> String {
+        let visionRequest = VisionPromptBuilder.buildRequest(
+            question: question,
+            appshots: appshots,
+            model: model
+        )
+        return try await callVisionCompletions(visionRequest: visionRequest)
+    }
+
+    // MARK: - Private (compose path)
 
     private func callCompletions(messages: [ChatMessage]) async throws -> String {
         let request = try buildRequest(messages: messages)
@@ -105,6 +117,29 @@ public final class LocalOpenAIEngine: CognitiveEngine, @unchecked Sendable {
         request.httpBody = try JSONEncoder().encode(body)
         return request
     }
+
+    // MARK: - Private (vision path)
+
+    private func callVisionCompletions(visionRequest: VisionCompletionsRequest) async throws -> String {
+        let urlRequest = try buildVisionRequest(visionRequest: visionRequest)
+        let (data, response) = try await transport.send(request: urlRequest)
+        return try parseResponse(data: data, response: response)
+    }
+
+    func buildVisionRequest(visionRequest: VisionCompletionsRequest) throws -> URLRequest {
+        var request = URLRequest(url: Self.completionsURL)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Per ADR-0004: ZDR header on every Cognitive Engine call.
+        // Image bytes must not be logged or retained.
+        request.setValue("true", forHTTPHeaderField: "OpenAI-ZDR")
+        // Never log request bodies — image bytes are sensitive user data.
+        request.httpBody = try JSONEncoder().encode(visionRequest)
+        return request
+    }
+
+    // MARK: - Private (shared response parse)
 
     private func parseResponse(data: Data, response: URLResponse) throws -> String {
         guard let http = response as? HTTPURLResponse else {
