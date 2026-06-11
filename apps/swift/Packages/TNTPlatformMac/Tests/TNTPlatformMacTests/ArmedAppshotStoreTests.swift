@@ -347,4 +347,57 @@ final class ArmedAppshotStoreTests: XCTestCase {
         XCTAssertEqual(coordinator.armedCount, 0, "Failed capture must not arm anything")
         XCTAssertTrue(chipUpdates.isEmpty, "No chip update when capture fails")
     }
+
+    // MARK: - ArmedAppshotStore.consume(ids:) — issue #126
+
+    func testConsumeRemovesMatchingIds() {
+        let id1 = UUID()
+        let id2 = UUID()
+        var store = ArmedAppshotStore()
+        store.arm(Appshot(id: id1, windowText: "a", appName: "App1"))
+        store.arm(Appshot(id: id2, windowText: "b", appName: "App2"))
+        store.consume(ids: [id1])
+        XCTAssertEqual(store.count, 1)
+        XCTAssertEqual(store.appshots[0].id, id2,
+            "consume(ids:) must remove only the matching id, leaving id2")
+    }
+
+    func testConsumeWithUnknownIdIsNoOp() {
+        let knownId = UUID()
+        var store = ArmedAppshotStore()
+        store.arm(Appshot(id: knownId, windowText: "text", appName: "App"))
+        store.consume(ids: [UUID()])  // unknown id
+        XCTAssertEqual(store.count, 1, "Consuming an unknown id must not remove anything")
+    }
+
+    func testConsumeWithEmptySetIsNoOp() {
+        var store = ArmedAppshotStore()
+        store.arm(makeAppshot(appName: "App"))
+        store.consume(ids: [])
+        XCTAssertEqual(store.count, 1, "Consuming empty set must be a no-op")
+    }
+
+    func testConsumeAllIds() {
+        let id1 = UUID()
+        let id2 = UUID()
+        var store = ArmedAppshotStore()
+        store.arm(Appshot(id: id1, windowText: "a", appName: "App1"))
+        store.arm(Appshot(id: id2, windowText: "b", appName: "App2"))
+        store.consume(ids: [id1, id2])
+        XCTAssertEqual(store.count, 0, "Consuming all ids must empty the store")
+    }
+
+    func testConsumePreservesNonMatchingInOrder() {
+        let idA = UUID()
+        let idB = UUID()
+        let idC = UUID()
+        var store = ArmedAppshotStore()
+        store.arm(Appshot(id: idA, windowText: "a", appName: "App1"))
+        store.arm(Appshot(id: idB, windowText: "b", appName: "App2"))
+        store.arm(Appshot(id: idC, windowText: "c", appName: "App3"))
+        store.consume(ids: [idB])
+        XCTAssertEqual(store.count, 2)
+        XCTAssertEqual(store.appshots[0].id, idA, "App1 (first) must remain")
+        XCTAssertEqual(store.appshots[1].id, idC, "App3 (third) must remain, in order")
+    }
 }

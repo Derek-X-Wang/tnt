@@ -18,6 +18,11 @@
 // Capture behavior (ScreenCaptureKit + AX reads) lives in
 // TNTPlatformMac — this file is pure data. Never written to disk by
 // default; held in memory for the duration of the Voice Turn only.
+//
+// Issue #126: `id: UUID` (capture-time uniqueness) enables VisionOrchestrator
+// to consume EXACTLY the armed Appshots dispatched to the vision call —
+// not whatever is armed at completion. Tests that compare two separately-
+// constructed Appshots for equality must inject a fixed id.
 
 import Foundation
 
@@ -26,7 +31,16 @@ import Foundation
 /// Both fields are optional: some apps only expose window text (no
 /// Screen Recording permission), some only expose images (Accessibility
 /// denied), and some expose both. `isEmpty` is true only when both are nil.
+///
+/// `id` is a capture-time stable UUID (issue #126) so `VisionOrchestrator`
+/// can consume exactly the Appshots dispatched to the vision call — not
+/// whatever is armed at completion. The id defaults to a fresh `UUID()` at
+/// init time and round-trips through Codable under the key `"id"`.
 public struct Appshot: Codable, Equatable, Sendable {
+
+    /// Capture-time stable identity (issue #126).
+    /// Defaults to a new `UUID()` at init; explicit init available for tests.
+    public let id: UUID
 
     /// JPEG image of the frontmost window at capture time.
     /// `nil` if Screen Recording TCC was not granted or the window
@@ -61,6 +75,7 @@ public struct Appshot: Codable, Equatable, Sendable {
     public let capturedAt: Date?
 
     private enum CodingKeys: String, CodingKey {
+        case id
         case imageJPEG = "image_jpeg"
         case windowText = "window_text"
         case appName = "app_name"
@@ -69,7 +84,9 @@ public struct Appshot: Codable, Equatable, Sendable {
         case capturedAt = "captured_at"
     }
 
+    /// Full init with explicit `id` for tests that need stable identity.
     public init(
+        id: UUID = UUID(),
         imageJPEG: Data? = nil,
         windowText: String? = nil,
         appName: String? = nil,
@@ -77,6 +94,7 @@ public struct Appshot: Codable, Equatable, Sendable {
         project: ProjectRef? = nil,
         capturedAt: Date? = nil
     ) {
+        self.id = id
         self.imageJPEG = imageJPEG
         self.windowText = windowText
         self.appName = appName
