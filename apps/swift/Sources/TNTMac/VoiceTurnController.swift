@@ -141,17 +141,17 @@ final class VoiceTurnController {
 
     /// Tier-1 screen-text round-trip policy (issue #105, M4a). Mirrors the
     /// composeOrchestrator pattern with injected closures for testability.
-    /// resolveSources uses the attached capture's Appshots (armed-or-fresh
-    /// resolved upstream by the arming coordinator once wired — #107).
+    /// Mixed mode per #119: armed Appshots PLUS a labeled fresh grab of the
+    /// current frontmost window, so a stale armed capture can never silently
+    /// answer for the screen the user is actually looking at.
     private lazy var screenTextOrchestrator = ScreenTextOrchestrator(
         resolveSources: { [weak self] in
-            guard let self else { return [] }
-            // Armed-if-present, else one fresh text grab (#104 resolver).
-            let result = ScreenSourceResolver().resolve(
+            guard let self else { return ResolvedScreenSources(armed: [], current: nil) }
+            let resolved = ScreenSourceResolver().resolve(
                 armed: self.armingCoordinator.armed,
                 freshGrab: { self.captureAppshot?() ?? nil }
             )
-            if let pulled = result.pulled {
+            if let pulled = resolved.current {
                 // Same-list contract: the voice-pulled grab joins the turn's
                 // appshots and is shown post-hoc on the chip. Display is
                 // transient by construction — the next coordinator chip
@@ -167,16 +167,18 @@ final class VoiceTurnController {
             }
             // Metadata-only (never content): which sources + how much text
             // the snapshot will carry — "why can't it see" must be diagnosable.
-            let sizes = result.sources.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" }.joined(separator: ",")
-            TNTLog.voice.info("readScreen sources: \(result.sources.count, privacy: .public) [\(sizes, privacy: .public)] pulled=\(result.pulled != nil, privacy: .public)")
-            return result.sources
+            let armedSizes = resolved.armed.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" }.joined(separator: ",")
+            let currentSize = resolved.current.map { "\($0.appName ?? "?")=\($0.windowText?.count ?? 0)ch" } ?? "none"
+            TNTLog.voice.info("readScreen armed: \(resolved.armed.count, privacy: .public) [\(armedSizes, privacy: .public)] current=\(currentSize, privacy: .public)")
+            return resolved
         },
-        buildSnapshot: { question, sources in
+        buildSnapshot: { question, resolved in
             let snapshot = ScreenTextSnapshotBuilder.build(
                 question: question,
-                appshots: sources,
-                sourceKind: sources.isEmpty ? .freshGrab : .armedAppshot,
-                visionAvailable: false  // M4a: no vision tier yet
+                armed: resolved.armed,
+                current: resolved.current,
+                visionAvailable: false,  // M4a: no vision tier yet
+                now: Date()
             )
             return (try? snapshot.jsonString()) ?? "{\"kind\":\"screen_text_snapshot\",\"error\":\"encode_failed\"}"
         },

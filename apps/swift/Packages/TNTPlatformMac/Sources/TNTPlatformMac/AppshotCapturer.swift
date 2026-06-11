@@ -19,15 +19,18 @@ public final class AppshotCapturer {
     private let signals: WindowSignalsReading
     private let windowText: () -> String?
     private let trustGate: () -> Bool
+    private let now: () -> Date
 
     public init(
         signals: WindowSignalsReading = AXWindowSignalsReader(),
         windowText: @escaping () -> String? = { AXWindowTextReader().readFrontmostWindowText() },
-        trustGate: @escaping () -> Bool = AccessibilityClient.systemTrustGate
+        trustGate: @escaping () -> Bool = AccessibilityClient.systemTrustGate,
+        now: @escaping () -> Date = { Date() }
     ) {
         self.signals = signals
         self.windowText = windowText
         self.trustGate = trustGate
+        self.now = now
     }
 
     /// Capture a frozen text-only Appshot of the frontmost window.
@@ -54,7 +57,8 @@ public final class AppshotCapturer {
             windowText: windowText(),
             appName: raw.appName,
             windowTitle: raw.windowTitle,
-            project: project
+            project: project,
+            capturedAt: now()  // #119: snapshot reports per-source capture age
         )
     }
 }

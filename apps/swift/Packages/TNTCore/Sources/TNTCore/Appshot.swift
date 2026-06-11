@@ -54,12 +54,19 @@ public struct Appshot: Codable, Equatable, Sendable {
     /// Project the source window was in at capture time.
     public let project: ProjectRef?
 
+    /// Instant the Appshot was frozen (#119). Lets the screen-text snapshot
+    /// report per-source capture age so the model can flag staleness when an
+    /// armed Appshot is older than the question implies. Optional for
+    /// backward compatibility with pre-#119 payloads.
+    public let capturedAt: Date?
+
     private enum CodingKeys: String, CodingKey {
         case imageJPEG = "image_jpeg"
         case windowText = "window_text"
         case appName = "app_name"
         case windowTitle = "window_title"
         case project
+        case capturedAt = "captured_at"
     }
 
     public init(
@@ -67,13 +74,15 @@ public struct Appshot: Codable, Equatable, Sendable {
         windowText: String? = nil,
         appName: String? = nil,
         windowTitle: String? = nil,
-        project: ProjectRef? = nil
+        project: ProjectRef? = nil,
+        capturedAt: Date? = nil
     ) {
         self.imageJPEG = imageJPEG
         self.windowText = windowText
         self.appName = appName
         self.windowTitle = windowTitle
         self.project = project
+        self.capturedAt = capturedAt
     }
 
     /// True when no content has been captured — both `imageJPEG` and

@@ -149,64 +149,94 @@ final class ArmedAppshotStoreTests: XCTestCase {
             "Newest armed must win when multiple armed Appshots have the same field")
     }
 
-    // MARK: - ScreenSourceResolver
+    // MARK: - ScreenSourceResolver (mixed mode, #119)
 
-    func testResolverReturnsArmedWhenArmedPresent() {
+    func testResolverIncludesArmedAndCurrent() {
         let a1 = makeAppshot(appName: "Cursor")
         var freshCallCount = 0
         let resolver = ScreenSourceResolver()
-        let (sources, pulled) = resolver.resolve(
+        let resolved = resolver.resolve(
             armed: [a1],
             freshGrab: {
                 freshCallCount += 1
-                return self.makeAppshot(appName: "FreshGrab")
+                return self.makeAppshot(appName: "Arc")
             }
         )
-        XCTAssertEqual(sources.count, 1)
-        XCTAssertEqual(sources[0].appName, "Cursor",
-            "Armed Appshot must be returned as source")
-        XCTAssertNil(pulled, "No fresh grab when armed is present")
-        XCTAssertEqual(freshCallCount, 0,
-            "Fresh-grab closure must NOT be invoked when armed Appshots are present")
-    }
-
-    func testResolverCallsFreshGrabWhenNoneArmed() {
-        var freshCallCount = 0
-        let resolver = ScreenSourceResolver()
-        let (sources, pulled) = resolver.resolve(
-            armed: [],
-            freshGrab: {
-                freshCallCount += 1
-                return self.makeAppshot(appName: "FreshApp")
-            }
-        )
+        XCTAssertEqual(resolved.armed.map(\.appName), ["Cursor"],
+            "Armed Appshot must be kept alongside the fresh grab")
+        XCTAssertEqual(resolved.current?.appName, "Arc",
+            "Fresh grab of the current frontmost must always be included")
         XCTAssertEqual(freshCallCount, 1,
-            "Fresh-grab closure must be invoked exactly once when no armed Appshots")
-        XCTAssertEqual(sources.count, 1)
-        XCTAssertEqual(pulled?.appName, "FreshApp")
+            "Mixed mode: fresh-grab closure runs even when armed Appshots exist")
     }
 
-    func testResolverReturnsEmptyWhenFreshGrabFails() {
+    func testResolverFreshGrabCalledExactlyOnceWithAndWithoutArmed() {
         let resolver = ScreenSourceResolver()
-        let (sources, pulled) = resolver.resolve(
-            armed: [],
-            freshGrab: { nil }  // capture failed
-        )
-        XCTAssertTrue(sources.isEmpty)
-        XCTAssertNil(pulled)
+        for armed in [[], [makeAppshot(appName: "Cursor")]] {
+            var callCount = 0
+            _ = resolver.resolve(
+                armed: armed,
+                freshGrab: {
+                    callCount += 1
+                    return self.makeAppshot(appName: "App")
+                }
+            )
+            XCTAssertEqual(callCount, 1,
+                "Fresh-grab closure must be called exactly once (armed.count=\(armed.count))")
+        }
     }
 
-    func testResolverFreshGrabCalledExactlyOnce() {
-        var callCount = 0
+    func testResolverNoArmedReturnsCurrentOnly() {
         let resolver = ScreenSourceResolver()
-        _ = resolver.resolve(
+        let resolved = resolver.resolve(
             armed: [],
-            freshGrab: {
-                callCount += 1
-                return self.makeAppshot(appName: "App")
-            }
+            freshGrab: { self.makeAppshot(appName: "FreshApp") }
         )
-        XCTAssertEqual(callCount, 1, "Fresh-grab closure must be called exactly once")
+        XCTAssertTrue(resolved.armed.isEmpty)
+        XCTAssertEqual(resolved.current?.appName, "FreshApp")
+    }
+
+    func testResolverFreshGrabFailureKeepsArmedOnly() {
+        let resolver = ScreenSourceResolver()
+        let resolved = resolver.resolve(
+            armed: [makeAppshot(appName: "Cursor")],
+            freshGrab: { nil }  // capture failed (AX untrusted)
+        )
+        XCTAssertEqual(resolved.armed.map(\.appName), ["Cursor"],
+            "Armed captures survive a failed fresh grab")
+        XCTAssertNil(resolved.current)
+    }
+
+    func testResolverEmptyWhenNothingAvailable() {
+        let resolver = ScreenSourceResolver()
+        let resolved = resolver.resolve(armed: [], freshGrab: { nil })
+        XCTAssertTrue(resolved.isEmpty)
+    }
+
+    func testResolverFreshSupersedesSameWindowArmed() {
+        // Armed shot of the SAME app+window as the current frontmost: the
+        // fresh grab is that window's up-to-date text — armed copy dropped
+        // from this snapshot (store untouched; dedupe is per-resolve only).
+        let armedCursor = makeAppshot(appName: "Cursor")  // title "Cursor window"
+        let resolver = ScreenSourceResolver()
+        let resolved = resolver.resolve(
+            armed: [armedCursor],
+            freshGrab: { self.makeAppshot(appName: "Cursor", windowText: "newer text") }
+        )
+        XCTAssertTrue(resolved.armed.isEmpty,
+            "Same app+window armed shot must be superseded by the fresh grab")
+        XCTAssertEqual(resolved.current?.windowText, "newer text")
+    }
+
+    func testResolverKeepsSameAppDifferentWindowArmed() {
+        let armedOther = Appshot(windowText: "old doc", appName: "Cursor", windowTitle: "other.swift")
+        let resolver = ScreenSourceResolver()
+        let resolved = resolver.resolve(
+            armed: [armedOther],
+            freshGrab: { self.makeAppshot(appName: "Cursor") }  // title "Cursor window"
+        )
+        XCTAssertEqual(resolved.armed.count, 1,
+            "Same app but DIFFERENT window title is a different document — kept")
     }
 
     // MARK: - Lifecycle: persists across a no-tool turn
@@ -227,23 +257,20 @@ final class ArmedAppshotStoreTests: XCTestCase {
     }
 
     func testVoicePulledGrabIsTurnScoped() {
-        // The pulled Appshot returned by ScreenSourceResolver is turn-scoped:
-        // the CALLER is responsible for clearing it at turn end.
-        // We verify the resolver returns it separately via `pulled`.
+        // The `current` Appshot returned by ScreenSourceResolver is turn-scoped:
+        // the CALLER appends it to the turn's appshots and clears it at turn end.
         let resolver = ScreenSourceResolver()
-        let (_, pulled1) = resolver.resolve(
+        let r1 = resolver.resolve(
             armed: [],
             freshGrab: { self.makeAppshot(appName: "FreshApp") }
         )
-        XCTAssertNotNil(pulled1, "Pulled grab must be returned for turn-scoped lifetime tracking")
-        // After the turn ends, the caller clears `pulled`; the next resolve
-        // can grab again.
-        let (_, pulled2) = resolver.resolve(
+        XCTAssertNotNil(r1.current, "Current grab must be returned for turn-scoped lifetime tracking")
+        // After the turn ends, the caller clears it; the next resolve grabs again.
+        let r2 = resolver.resolve(
             armed: [],
             freshGrab: { self.makeAppshot(appName: "FreshApp2") }
         )
-        XCTAssertNotNil(pulled2, "New turn can grab fresh again")
-        XCTAssertEqual(pulled2?.appName, "FreshApp2")
+        XCTAssertEqual(r2.current?.appName, "FreshApp2", "New turn can grab fresh again")
     }
 
     // MARK: - AppshotArmingCoordinator smoke test
