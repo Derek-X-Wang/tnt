@@ -4,10 +4,10 @@
 // protocol, never on the concrete impl — the composition root in
 // `TNTMac` is the only file that constructs the concrete type.
 //
-// Scope: M1 ships `compose` only. Each milestone grows the protocol by
-// exactly one method so each is independently shippable (per the milestones
-// in docs/roadmap.md). Do not add `summarize`/`whatsPending`/etc. here
-// until M2; do not add `extractCorrection` until M3.
+// Scope: M1 ships `compose`; M4b adds `answerAboutScreen`. Each milestone
+// grows the protocol by exactly one method so each is independently shippable
+// (per the milestones in docs/roadmap.md). Do not add `summarize`/
+// `whatsPending`/etc. here until M2; do not add `extractCorrection` until M3.
 
 import Foundation
 import TNTCore
@@ -40,5 +40,32 @@ public protocol CognitiveEngine: AnyObject, Sendable {
         intent: String,
         raw: String,
         capture: CaptureSet
+    ) async throws -> String
+
+    // MARK: - M4b: Vision route
+
+    /// Answer a user question about what's on screen using the vision-capable
+    /// Cognitive Engine (Tier-2 escalation path, ADR-0006 amendment).
+    ///
+    /// Called when the Realtime model invoked `analyze_screen` after
+    /// `read_screen_text` returned an empty/sparse snapshot. Routes
+    /// image + Window Text from the provided **Appshots** through the
+    /// vision model, never through the Realtime session.
+    ///
+    /// The caller (VisionOrchestrator, issue #126) owns:
+    /// - Stale-token guard (drops result if a barge-in occurred).
+    /// - Consume-on-success: only the armed Appshots that were resolved at
+    ///   dispatch time are consumed, not any newly-armed ones.
+    ///
+    /// Failure contract: throws on transport error, HTTP error, or empty
+    /// model response. VisionOrchestrator emits an error-shaped fco on throw.
+    ///
+    /// - Parameters:
+    ///   - question: The user's question from the `analyze_screen` tool call.
+    ///   - appshots: Resolved Appshots (armed + fresh grab) at dispatch time.
+    /// - Returns: The model's answer as a plain-text string.
+    func answerAboutScreen(
+        question: String,
+        appshots: [Appshot]
     ) async throws -> String
 }
