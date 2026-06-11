@@ -67,10 +67,17 @@ final class VoiceTurnController {
     private let promptDeliverer: PromptDeliverer
 
     /// The Capture Set attached to the next Voice Turn, mirrored to the menu
-    /// bar's Capture Chip (#52). Stays `.empty` until live AX capture lands
-    /// (#49); the user can clear it from the chip at any time, which
-    /// suppresses context for the next turn.
+    /// bar's Capture Chip (#52). Populated at turn-start by `captureContext`
+    /// (#49); the user can clear it from the chip at any time.
     private(set) var attachedCapture: CaptureSet = .empty
+
+    /// Set by the chip's Clear action: the NEXT turn skips capture and goes
+    /// out context-free (the #52 acceptance promise), then capture resumes.
+    private var captureSuppressedForNextTurn = false
+
+    /// Live frontmost-window capture, injected from the composition root
+    /// (#49: AccessibilityClient.captureNow). Nil = no capture wired.
+    private let captureContext: (@MainActor () -> CaptureSet)?
 
     /// Pure compose round-trip policy (issue #79). Lazy so its self-capturing
     /// send/event hooks can reference `self` after init completes.
@@ -92,13 +99,15 @@ final class VoiceTurnController {
         apiKeyProvider: @escaping () throws -> String,
         voice: String = "marin",
         compose: @escaping (AgentRef, String, String, CaptureSet) async throws -> String,
-        promptDeliverer: PromptDeliverer
+        promptDeliverer: PromptDeliverer,
+        captureContext: (@MainActor () -> CaptureSet)? = nil
     ) {
         self.menuBarHost = menuBarHost
         self.apiKeyProvider = apiKeyProvider
         self.voice = voice
         self.composeFunc = compose
         self.promptDeliverer = promptDeliverer
+        self.captureContext = captureContext
         self.audio = RealtimeAudioSession()
     }
 
@@ -112,9 +121,34 @@ final class VoiceTurnController {
     }
 
     /// Clear the attached context (Capture Chip "Clear Context" action).
-    /// The next Voice Turn goes out with no Capture Set until re-captured.
+    /// The next Voice Turn goes out with no Capture Set — turn-start capture
+    /// is suppressed once, then resumes (the #52 acceptance promise).
     func clearAttachedCapture() {
+        captureSuppressedForNextTurn = true
         setAttachedCapture(.empty)
+    }
+
+    /// Turn-start capture (#49): grab the frontmost window context at the
+    /// moment the user starts speaking (not lazily at compose time — the
+    /// focus may move during the turn). Honors the chip's Clear suppression.
+    private func captureAtTurnStart() {
+        guard let captureContext else { return }
+        if captureSuppressedForNextTurn {
+            captureSuppressedForNextTurn = false
+            TNTLog.voice.info("captureAtTurnStart: suppressed by Clear Context — turn goes out context-free")
+            return
+        }
+        let capture = captureContext()
+        setAttachedCapture(capture)
+        // Field-level summary (no content) so "why is my context empty/partial"
+        // is diagnosable per-app — AX exposure varies wildly between apps.
+        let summary = capture.isEmpty ? "empty" : [
+            capture.appName ?? "app=nil",
+            "title=\(capture.windowTitle != nil ? "yes" : "nil")",
+            "selection=\(capture.selectedText.map { "\($0.count) chars" } ?? "nil")",
+            "project=\(capture.project?.name ?? "nil")",
+        ].joined(separator: " · ")
+        TNTLog.voice.info("captureAtTurnStart: \(summary, privacy: .public)")
     }
 
     // MARK: - Pre-warm
@@ -133,6 +167,9 @@ final class VoiceTurnController {
     // MARK: - Hotkey edges
 
     func startListening() async {
+        // Capture the frontmost-window context at press time (#49) — before
+        // the connection await, so we snapshot the window the user was in.
+        captureAtTurnStart()
         TNTLog.voice.info("startListening: ensuring connection")
         await ensureConnection()
         guard client != nil else {
@@ -380,6 +417,12 @@ final class VoiceTurnController {
                     audio.requestStopWhenDrained()
                 default:
                     break
+                }
+                // Turn over (delivered / declined / errored): the context was
+                // either consumed or abandoned — reset the chip so it never
+                // shows stale context between turns (#49 clear-lifecycle).
+                if state == .idle {
+                    setAttachedCapture(.empty)
                 }
             case .startCapture:
                 framesThisTurn = 0

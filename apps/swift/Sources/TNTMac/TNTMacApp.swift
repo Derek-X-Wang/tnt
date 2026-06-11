@@ -127,7 +127,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pasteboard: NSPasteboardSink(),
                 chime: NSSoundChimeSink(),
                 notification: UNNotificationSink()
-            )
+            ),
+            // Live frontmost-window capture (#49). JIT Accessibility prompt on
+            // first capture (never at launch); untrusted → empty Capture Set.
+            captureContext: { [accessibilityClient = AccessibilityClient()] in
+                accessibilityClient.captureNow()
+            }
         )
         self.voiceTurnController = voiceController
 
