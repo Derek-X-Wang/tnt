@@ -85,19 +85,30 @@ Use TNT for a few days. Tell it: "When you talk to Claude Code on this repo, pre
 
 An **Appshot** sends the frontmost app window — **image + Window Text** — into a Voice Turn so TNT can answer questions about what's on screen. Modeled on the Codex Appshots feature. Depends on M1 (Capture Set, `CognitiveEngine`, the Realtime function-call wiring in #30) and M3 (the Cognitive Engine work the vision route extends). See ADR-0006 (Appshot vision routing) and the ADR-0004 amendment (user-initiated capture privacy).
 
-**Acceptance demo**
-With Cursor open showing an error, the user presses the **Appshot Hotkey** (⌃⌥⇧Space) — the Capture Chip shows "📸 Cursor armed". The user then holds ⌥Space and asks "what's causing this?". The Realtime model calls the vision tool; TNT routes the armed Appshot (image + Window Text) + transcript to the vision-capable Cognitive Engine; the answer is re-injected into the Realtime session and spoken in one voice. The hands-free path also works: with no Appshot armed, the user says "look at this and tell me the data flow" and the model calls the same tool, capturing the frontmost window fresh.
+**Acceptance demo (M4a — text tier)**
+With Cursor open showing an error, the user presses the **Appshot Hotkey** (⌃⌥⇧Space) — the Capture Chip shows "📸 Cursor armed". The user then holds the voice hotkey and asks "what's causing this?". The Realtime model calls `read_screen_text`; TNT returns the armed Appshot's Window-Text snapshot directly as the tool output; the model answers from the text and speaks — no second model call. The hands-free path also works: with no Appshot armed, "look at this and tell me what this error says" triggers the same tool with a fresh frontmost text grab.
 
-**Ships**
+**Acceptance demo (M4b — vision tier, forced-vision case)**
+With a chart / image-only window (or a Google Doc exposing no AX text) frontmost, the user asks "what does this chart show?". `read_screen_text` returns an empty/insufficient snapshot; the model escalates to `analyze_screen`; TNT routes image + Window Text to the vision-capable Cognitive Engine; the answer is re-injected and spoken in one voice. Text-tier success must not mask a broken vision tier.
+
+**Ships — staged per the ADR-0006 tiering amendment.** Most screen questions are answerable from Window Text alone; the vision-model call (cost + latency + Screen Recording TCC) is reserved for when text isn't enough. The Realtime model decides escalation; tool registration is composable, so enabling the vision tier is a config change.
+
+**M4a — text tier:**
 - **Appshot Hotkey** (default ⌃⌥⇧Space, configurable) in `TNTPlatformMac` — single press captures + arms an Appshot. Reuses `HotkeyChord` (no hold/tap recognizer).
-- **Appshot** as a frozen, self-contained context unit in `TNTCore`: `image` (JPEG) + `windowText` + the source window's `appName`/`windowTitle`/`project`, captured together. Capture Set holds `appshots: [Appshot]` (stacking supported).
-- **ScreenCaptureKit** integration in `TNTPlatformMac` (frontmost window image only).
-- **Window Text** capture via Accessibility API (visible + off-screen available text) in `TNTPlatformMac`. Google Docs/Gmail/Sheets/Slides may yield image-only.
-- **Single vision tool** in the Realtime session config; TNT resolves the source (armed Appshots if present, else fresh frontmost grab). When Appshots are armed, TNT injects "N appshots attached" into the session so the model knows vision is available.
-- **Vision route** in `LocalOpenAIEngine` (`CognitiveEngine`): transcript + appshot image(s) + Window Text → vision-capable model (`cognitiveModel`, default gpt-5.2) → answer text → re-injected into Realtime via `function_call_output` (#30) so the Realtime model speaks it.
-- **JIT permissions**: Screen Recording (image) and Accessibility (Window Text) requested on first Appshot, not at first launch. First-run consent screen still names all three up front.
-- **Capture Chip** shows source app + image thumbnail **and** a Window-Text preview before send; clearable (all or last).
-- In-memory only, JPEG quality 80, never written to disk by default.
+- **Appshot** as a frozen, self-contained context unit in `TNTCore`: `windowText` + the source window's `appName`/`windowTitle`/`project`, captured together (`image` stays nil in M4a). Capture Set holds `appshots: [Appshot]` (stacking supported); armed Appshots persist until consumed or cleared.
+- **Window Text** capture via Accessibility API (visible + off-screen available text) in `TNTPlatformMac`. Google Docs/Gmail/Sheets/Slides may yield little or no text (the snapshot says so; escalation arrives in M4b).
+- **`read_screen_text(question)` tool** in the Realtime session config; TNT resolves the source (armed Appshots if present, else fresh frontmost text grab) and returns a structured, capped Window-Text snapshot directly as the tool output — no Cognitive Engine call. When Appshots are armed, TNT injects "N appshots attached" into the session.
+- **Capture Chip** shows source app + a Window-Text preview before send; clearable (all or last); continuously reflects armed Appshots.
+- **No Screen Recording TCC anywhere in M4a** — the text tier is Accessibility-only.
+- In-memory only, never written to disk by default.
+
+**M4b — vision tier:**
+- **`analyze_screen(question)` tool** appended to the session config (composable registration).
+- **ScreenCaptureKit** one-shot frontmost-window image capture (JPEG quality 80); armed Appshots now freeze image + text together.
+- **Vision route** in `LocalOpenAIEngine` (`CognitiveEngine.answerAboutScreen`): question + appshot image(s) + Window Text → vision-capable model (`cognitiveModel`, default gpt-5.2) → answer text → re-injected into Realtime via `function_call_output` (#30) so the Realtime model speaks it.
+- **JIT Screen Recording** on first `analyze_screen`, not at launch (first grant may require app relaunch — documented in the checklist). First-run consent screen still names all permissions up front.
+- `analyze_screen` consumes armed Appshots on a successful vision answer; `read_screen_text` never consumes.
+- Capture Chip gains the image thumbnail preview.
 
 ---
 
