@@ -312,8 +312,70 @@ final class ScreenTextSnapshotTests: XCTestCase {
     }
 
     func testSubstantialTextProducesOkQuality() {
-        let snapshot = buildArmed([makeAppshot(windowText: String(repeating: "a", count: 100))])
+        // Real content has word boundaries (spaces). "a b c …" is a minimal
+        // multi-word text; a solid wall of letters with no spaces is single-token.
+        let prose = String(repeating: "word ", count: 20)  // 100 chars, has spaces
+        let snapshot = buildArmed([makeAppshot(windowText: prose)])
         XCTAssertEqual(snapshot.sources[0].textQuality, .ok)
+    }
+
+    // MARK: - Text quality goldens for issue #137
+
+    /// A bare filename (≥30 chars, no spaces) must be .sparse — not .ok.
+    /// Root cause of issue #137: "scoreboard-finals-2024.png" (36ch) was
+    /// classified .ok because only the 30-char threshold existed.
+    func testFilenameOnlyIsSparse() {
+        // 38 chars; exceeds the old 30-char threshold → was erroneously .ok
+        let filename = "scoreboard-finals-2024-championship.png"
+        XCTAssertGreaterThan(filename.count, 30, "Test data must exceed old threshold")
+        let snapshot = buildArmed([makeAppshot(windowText: filename)])
+        XCTAssertEqual(snapshot.sources[0].textQuality, .sparse,
+            "Filename-only text (single token, no spaces) must be .sparse even when ≥30 chars")
+    }
+
+    /// A single word (no spaces) of any length is .sparse.
+    func testSingleWordIsSparse() {
+        let snapshot = buildArmed([makeAppshot(windowText: "Preview")])
+        XCTAssertEqual(snapshot.sources[0].textQuality, .sparse,
+            "A single word with no spaces is .sparse")
+    }
+
+    /// Empty string is .empty (unchanged).
+    func testEmptyStringIsEmpty() {
+        let snapshot = buildArmed([makeAppshot(windowText: "")])
+        XCTAssertEqual(snapshot.sources[0].textQuality, .empty)
+    }
+
+    /// A real paragraph (multiple words, spaces) is .ok.
+    func testRealParagraphIsOk() {
+        let para = "The quick brown fox jumps over the lazy dog. This is real prose content."
+        let snapshot = buildArmed([makeAppshot(windowText: para)])
+        XCTAssertEqual(snapshot.sources[0].textQuality, .ok,
+            "Real prose with multiple words and spaces must be .ok")
+    }
+
+    /// Filename-only snapshot + visionEnabled → recommendedNextTool = analyze_screen (AC from #137).
+    func testFilenameOnlyWithVisionEnabledEscalates() {
+        let filename = "scoreboard-finals-2024-championship.png"
+        let snapshot = buildArmed([makeAppshot(windowText: filename)], visionAvailable: true)
+        XCTAssertEqual(snapshot.recommendedNextTool, "analyze_screen",
+            "Filename-only snapshot + visionEnabled must emit recommendedNextTool: analyze_screen")
+    }
+
+    /// Chrome-only single-token title + visionEnabled → recommendedNextTool = analyze_screen.
+    func testSingleTokenWindowTitleWithVisionEscalates() {
+        // A long identifier-style title with no whitespace (e.g. "Preview.app—scoreboard.png")
+        let chrome = "scoreboard-finals-championship-2024.png"
+        let snapshot = buildArmed([makeAppshot(windowText: chrome)], visionAvailable: true)
+        XCTAssertEqual(snapshot.recommendedNextTool, "analyze_screen")
+    }
+
+    /// Real prose + visionEnabled → recommendedNextTool stays nil (no spurious escalation, AC #137).
+    func testRealProseWithVisionDoesNotEscalate() {
+        let prose = "func greet(_ name: String) { print(\"Hello, \\(name)!\") }"
+        let snapshot = buildArmed([makeAppshot(windowText: prose)], visionAvailable: true)
+        XCTAssertNil(snapshot.recommendedNextTool,
+            "Real prose/code with spaces must NOT trigger escalation (no spurious escalation)")
     }
 
     // MARK: - Pure: no AppKit/AX imports (compile-time guarantee — no import needed here)
@@ -335,8 +397,10 @@ final class ScreenTextSnapshotTests: XCTestCase {
 
     /// visionAvailable=true but source is .ok → recommendedNextTool must be nil.
     func testRecommendedNextToolNilWhenAnySourceIsOk() {
+        // Real content: prose with spaces — must be .ok so no escalation fires.
+        let prose = String(repeating: "word ", count: 20)  // 100 chars, has spaces
         let snapshot = buildArmed(
-            [makeAppshot(windowText: String(repeating: "x", count: 100))],
+            [makeAppshot(windowText: prose)],
             visionAvailable: true
         )
         XCTAssertNil(snapshot.recommendedNextTool,
@@ -379,7 +443,9 @@ final class ScreenTextSnapshotTests: XCTestCase {
     /// Mixed: one armed (empty) + current (ok) → recommendedNextTool nil even with visionAvailable=true.
     func testRecommendedNextToolNilWhenMixedQualityWithOk() {
         let emptyArmed = makeAppshot(windowText: "")
-        let okCurrent = makeAppshot(windowText: String(repeating: "y", count: 100), appName: "Cursor")
+        // Real prose with spaces → .ok quality (not a filename/single-token)
+        let prose = String(repeating: "func foo() { return 1 } ", count: 5)  // multi-word code, spaces
+        let okCurrent = makeAppshot(windowText: prose, appName: "Cursor")
         let snapshot = ScreenTextSnapshotBuilder.build(
             question: "q",
             armed: [emptyArmed],
