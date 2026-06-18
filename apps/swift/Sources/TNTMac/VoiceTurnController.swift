@@ -35,6 +35,7 @@ final class VoiceTurnController {
     private var sendQueue: RealtimeSendQueue? { client?.sendQueue }
 
     private var captureDrainTask: Task<Void, Never>?
+    private var captureStallTask: Task<Void, Never>?
     private var inboundTask: Task<Void, Never>?
 
     /// Count of mic frames forwarded since the current turn's `.startCapture`.
@@ -389,10 +390,13 @@ final class VoiceTurnController {
 
     // MARK: - Pre-warm
 
-    /// Warm the audio device at launch so the user's first Voice Turn resumes
-    /// fast instead of paying the ~1.5s device cold-open (issue #73). Runs the
-    /// blocking start off the main actor. Caller gates on mic-granted + the
-    /// PrewarmSetting toggle.
+    /// Warm the mic capture unit at launch (issue #73 / AUHAL #141): prepares +
+    /// initializes the AUHAL input unit off the main actor so the first Voice
+    /// Turn skips component setup. The unit stays STOPPED (no
+    /// `AudioOutputUnitStart`), so — unlike the old AVAudioEngine prewarm — this
+    /// does NOT light the mic indicator. The HAL device wake on a long-cold
+    /// device is still paid by the first `start` (see #136 follow-up). Caller
+    /// gates on mic-granted + the PrewarmSetting toggle.
     func prewarmAudio() {
         let audio = self.audio
         Task.detached(priority: .utility) {
@@ -440,9 +444,11 @@ final class VoiceTurnController {
 
     func tearDown() async {
         captureDrainTask?.cancel()
+        captureStallTask?.cancel()
         inboundTask?.cancel()
         outboundTail?.cancel()
         captureDrainTask = nil
+        captureStallTask = nil
         inboundTask = nil
         audio.stop()
         if let client {
@@ -505,6 +511,26 @@ final class VoiceTurnController {
 
         startInboundDrain(on: c)
         startCaptureDrain()
+        startCaptureStallObserver()
+    }
+
+    /// Observe the audio session's capture-stall signal (#142/#136): the
+    /// zero-frame watchdog fired (device denied / stuck) after recovery failed.
+    /// Surface "didn't catch that" instead of a silent dead turn, and reset to
+    /// idle so the next press starts clean.
+    private func startCaptureStallObserver() {
+        guard captureStallTask == nil else { return }
+        captureStallTask = Task { [weak self] in
+            guard let self else { return }
+            for await _ in self.audio.captureStalled {
+                if Task.isCancelled { break }
+                TNTLog.voice.error("captureStalled: mic produced no audio — surfacing 'didn't catch that'")
+                self.menuBarHost?.setLastErrorMessage("Didn't catch that — press and hold again.")
+                self.flow = VoiceTurnFlow()
+                self.menuBarHost?.setState(.idle)
+                self.menuBarHost?.setMicLevel(nil)
+            }
+        }
     }
 
     private func startInboundDrain(on client: OpenAIRealtimeWSClient) {

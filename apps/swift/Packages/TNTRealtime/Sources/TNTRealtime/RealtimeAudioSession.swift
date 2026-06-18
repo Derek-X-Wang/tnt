@@ -1,36 +1,26 @@
-// RealtimeAudioSession — the single audio path for a Voice Turn. Owns ONE
-// `AVAudioEngine` that does both mic capture (plain HAL input) and speaker
-// playback (`AVAudioPlayerNode` → mixer → output).
+// RealtimeAudioSession — the audio path for a Voice Turn.
 //
-// Why no VoiceProcessingIO (ADR-0002 amendment, 2026-06, issue #73):
-// VPIO gives hardware echo cancellation + AGC, but as a system "voice chat"
-// unit it DUCKS all other audio system-wide for the entire time the engine
-// is alive — measured on hardware: with VPIO the user's YouTube/Music went
-// SILENT; with plain HAL it stays full volume. TNT's Voice Turn is sequential
-// (listen → think → speak), so the mic is not open while the reply plays;
-// hardware echo cancellation only mattered for barge-in on OPEN speakers, a
-// narrow case the Realtime server-side VAD tolerates. Dropping VPIO is the
-// right trade: never silence the user's media, at the cost of AEC on that one
-// path. (It does NOT change the ~1.7s first-press-after-idle cold start —
-// that is mic-hardware wake, which plain HAL pays too; see #73.)
+// CAPTURE and PLAYBACK are now SEPARATE units (issue #136 / #141 / #142):
+//   • Capture: raw CoreAudio AUHAL (CoreAudioInputUnit) → CaptureFloatRing →
+//     NativeCapturePipeline → `frames`. macOS-only. This replaces the old
+//     AVAudioEngine.installTap capture, which silently zombied (0 frames) after
+//     a long idle and blocked ~5s on inputNode.outputFormat(forBus:) — see the
+//     #136 research. The AUHAL unit is kept initialized-but-stopped between
+//     turns: warm device, instant start, mic indicator OFF between turns.
+//   • Playback: AVAudioEngine + AVAudioPlayerNode (unchanged). Output was never
+//     the problem; one plain output engine is fine.
 //
-// Why one engine is still fine: a single PLAIN engine does simultaneous
-// capture + playback without issue (measured: capture frames + playback tone
-// at once, no -10875). The two-engines-fight-the-HAL failure (-10875 /
-// KeystrokeSuppressor / HALC-overload) was specific to two *VPIO* full-duplex
-// units; one plain engine is safe.
+// Because the two are independent, capture stops the instant the user stops
+// speaking (stopCapture → AUHAL stop → mic dot off) while the reply keeps
+// playing on the AVAudioEngine — this is the #77 fix, now structural.
 //
-// Two distinct formats, deliberately NOT shared:
-//   * captureFormat  = PCM16 24 kHz mono — what the OpenAI Realtime API
-//                      ingests (`input_audio_buffer.append`). The capture
-//                      converter targets this.
-//   * playbackFormat = Float32 24 kHz mono (the engine's standard format)
-//                      — what `AVAudioPlayerNode` → `mainMixerNode` → the
-//                      hardware output actually accept. Connecting the
-//                      player with the Int16 capture format instead throws
-//                      -10875 (kAudioUnitErr_FormatNotSupported) at
-//                      engine start. Incoming PCM16 deltas are converted
-//                      to Float32 before scheduling.
+// playbackFormat = Float32 24 kHz mono (the engine/mixer/hardware format).
+// Incoming PCM16 deltas are converted to Float32 before scheduling.
+//
+// A zero-frame watchdog (CaptureControlCore) detects a dead capture turn (start
+// ok but no buffers — denied permission, stuck device) and surfaces it via
+// `captureStalled` so the Voice Turn layer can say "didn't catch that" instead
+// of a silent dead turn.
 
 import AVFoundation
 import Foundation
@@ -38,47 +28,64 @@ import os
 
 private let audioLog = Logger(subsystem: "com.derekxwang.tnt", category: "audio")
 
-/// Setup failures for the audio session. Only `formatMismatch` is
-/// reachable today (the audio-unit converter could not be built); kept as
-/// an enum so the surfaced message stays structured.
+/// Setup failures for the audio session.
 public enum AudioCaptureError: Error, Equatable, Sendable {
     case formatMismatch(String)
+    case captureUnavailable
 }
 
 public final class RealtimeAudioSession: @unchecked Sendable {
 
     public let format: FrameFormat
+
+    /// PCM16 24 kHz mono capture frames (unchanged public contract).
     public let frames: AsyncStream<Data>
     private let continuation: AsyncStream<Data>.Continuation
 
+    /// Fires when a capture turn produced no audio after recovery (#142/#77):
+    /// the Voice Turn layer surfaces "didn't catch that" instead of a silent
+    /// dead turn. Never fires on a normal turn.
+    public let captureStalled: AsyncStream<Void>
+    private let captureStalledContinuation: AsyncStream<Void>.Continuation
+
+    // MARK: - Playback (AVAudioEngine)
+
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
-    /// Float32 deinterleaved — the engine/mixer/hardware-native format.
     private let playbackFormat: AVAudioFormat
-    /// PCM16 interleaved — what the Realtime API expects on the wire.
-    private let captureFormat: AVAudioFormat
-
-    private var converter: AVAudioConverter?
-    private var pendingBytes = Data()
 
     private var engineStarted = false
-    private var capturing = false
-    /// Outstanding playback buffers scheduled but not yet finished. Lets
-    /// `requestStopWhenDrained` wait for the reply audio to finish before
-    /// releasing the mic.
     private var outstandingPlaybackBuffers = 0
-    /// When true, stop the engine (releasing the mic) as soon as playback
-    /// drains and capture is off — so the macOS mic-in-use indicator goes
-    /// off between turns instead of staying lit by the warm VPIO input.
     private var stopWhenDrained = false
     private let lock = NSLock()
+
+    // MARK: - Capture (AUHAL, macOS)
+
+    private let ring = CaptureFloatRing(capacity: 48_000)   // ~1s @ 48 kHz headroom
+    private let pipeline: NativeCapturePipeline
+    private let control = CaptureControlCore(firstBufferDeadline: 0.6)
+    /// Serializes the ENTIRE `drive()` body — control-core update AND the
+    /// AudioUnit command execution — so concurrent callers (consumer tick,
+    /// start/stopCapture, device listener) never mutate the unit at once.
+    private let driveLock = NSLock()
+    private let genLock = NSLock()
+    private var captureConsumer: Task<Void, Never>?
+    private var deviceGeneration = 0
+
+    #if os(macOS)
+    private var inputUnit: CoreAudioInputUnit?
+    #endif
 
     public init(format: FrameFormat = .realtimeDefault) {
         self.format = format
 
-        var resolved: AsyncStream<Data>.Continuation!
-        self.frames = AsyncStream<Data> { resolved = $0 }
-        self.continuation = resolved
+        var resolvedFrames: AsyncStream<Data>.Continuation!
+        self.frames = AsyncStream<Data> { resolvedFrames = $0 }
+        self.continuation = resolvedFrames
+
+        var resolvedStall: AsyncStream<Void>.Continuation!
+        self.captureStalled = AsyncStream<Void> { resolvedStall = $0 }
+        self.captureStalledContinuation = resolvedStall
 
         guard let playback = AVAudioFormat(
             standardFormatWithSampleRate: Double(format.sampleRate),
@@ -87,171 +94,63 @@ public final class RealtimeAudioSession: @unchecked Sendable {
             fatalError("Unsupported playback format Float32 \(format.sampleRate) Hz")
         }
         self.playbackFormat = playback
-
-        guard let capture = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: Double(format.sampleRate),
-            channels: AVAudioChannelCount(format.channels),
-            interleaved: true
-        ) else {
-            fatalError("Unsupported capture format PCM16 \(format.sampleRate) Hz")
-        }
-        self.captureFormat = capture
-    }
-
-    // MARK: - Engine lifecycle
-
-    /// Lazily configure + start the shared engine. Uses a PLAIN HAL input
-    /// node (NO VoiceProcessingIO — see the "Why no VPIO" note at the top of
-    /// this file and ADR-0002's 2026-06 amendment), attaches the player to
-    /// the mixer in the Float32 format the mixer accepts, and starts playback.
-    ///
-    /// One plain engine does both mic capture and speaker playback
-    /// simultaneously — measured working on hardware (capture + playback at
-    /// once, no -10875). The two-engines-fight-the-HAL failure mode is
-    /// specific to two *VPIO* full-duplex units; a single plain engine is fine.
-    private func ensureEngineStarted() throws {
-        if lock.withLock({ engineStarted }) { return }
-        // New activity cancels any pending drain-stop request.
-        lock.withLock { stopWhenDrained = false }
-
-        // Attach the player + connect it to the mixer exactly once, ever.
-        // Between turns the engine is PAUSED (`pauseForIdle`), not stopped, so
-        // the graph + node stay intact and `engine.start()` below resumes warm.
-        // Even after a full `stop()` the graph survives, so on any lazy restart
-        // the node is still attached+connected — and re-attaching an
-        // already-attached node is a fatal programmer error.
-        if player.engine == nil {
-            engine.attach(player)
-            engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
-        }
-
-        // Reference the input node BEFORE start(). This is load-bearing:
-        // AVAudioEngine only opens the hardware INPUT device if the input
-        // node has been realized before `start()`; otherwise it starts
-        // output-only and the mic never opens (capture yields 0 frames, no
-        // mic indicator). The old code touched the input node via
-        // `setVoiceProcessingEnabled` here, which incidentally realized it —
-        // dropping VPIO removed that side effect, so we realize it explicitly.
-        // (Reproduced + verified on hardware: no input-node ref before start
-        // → 0 frames; with this ref → frames flow. Issue #73.)
-        _ = engine.inputNode
-
-        // Plain HAL capture — no VoiceProcessingIO. VPIO's system-wide
-        // ducking silenced the user's other audio (YouTube/Music) for the
-        // whole time the engine was alive (measured: VPIO default = other
-        // audio SILENT; plain HAL = full volume). For TNT's sequential
-        // listen→speak Voice Turn the mic is not open while the reply plays,
-        // so hardware echo cancellation buys nothing on the common path; the
-        // only case it helped was barge-in on OPEN speakers, a narrow
-        // scenario the Realtime server-side VAD tolerates. See ADR-0002
-        // amendment (2026-06) + issue #73.
-        try engine.start()
-        audioLog.info("engine started (plain HAL capture, no voice processing)")
-        player.play()
-
-        lock.withLock { engineStarted = true }
+        self.pipeline = NativeCapturePipeline(outputFormat: format)
     }
 
     // MARK: - Pre-warm
 
-    /// Pay the one-time audio-device cold-open cost AT LAUNCH instead of on
-    /// the user's first Voice Turn. Starts the engine (the slow ~1.5s
-    /// first-ever device open) then immediately pauses it via `pauseForIdle`,
-    /// leaving the device warm with the mic indicator cleared. The user's
-    /// first hotkey press then resumes warm (~tens of ms) instead of paying
-    /// the cold open mid-turn.
-    ///
-    /// Call OFF the main actor (the start blocks ~1.5s). No-op if already
-    /// started/warm. Only meaningful when mic permission is already granted —
-    /// the caller is responsible for that check so a first-ever launch does
-    /// not trigger the TCC prompt out of onboarding context. Briefly lights
-    /// the mic indicator at launch (the documented trade for an instant
-    /// first turn; see issue #73).
+    /// Warm the mic device at launch so the first turn captures instantly.
+    /// AUHAL: prepare() creates + initializes the unit and leaves it STOPPED —
+    /// warm device, mic indicator off. Call off the main actor (prepare blocks
+    /// briefly on the cold device open). No-op if capture is unavailable.
     public func prewarm() {
+        #if os(macOS)
+        ensureInputUnit()
         do {
-            try ensureEngineStarted()
+            try inputUnit?.prepare()
+            audioLog.info("prewarm: AUHAL mic warmed + stopped (first turn resumes warm)")
         } catch {
-            audioLog.error("prewarm: engine start failed (\(error.localizedDescription, privacy: .public)) — first turn will pay cold open")
-            return
+            audioLog.error("prewarm: AUHAL prepare failed (\(error.localizedDescription, privacy: .public)) — first turn pays cold open")
         }
-        // Immediately release for idle: clears the mic indicator + frees other
-        // audio, but keeps the device warm for a fast first-turn resume.
-        pauseForIdle()
-        audioLog.info("prewarm: device warmed + paused (first turn will resume warm)")
+        #endif
     }
 
     // MARK: - Capture (mic → frames)
 
-    /// Begin forwarding mic audio as PCM16 `frames`. Idempotent. Starts
-    /// the shared engine if it isn't running yet.
+    /// Begin capturing. Idempotent. Starts the AUHAL unit (preparing it warm if
+    /// needed) and the off-thread consumer that drains ring → pipeline → frames.
     public func startCapture() throws {
-        try ensureEngineStarted()
-
-        if lock.withLock({ capturing }) { return }
-
-        let input = engine.inputNode
-        let nativeFormat = input.outputFormat(forBus: 0)
-        audioLog.info("capture native format: \(nativeFormat.sampleRate, privacy: .public)Hz ch=\(nativeFormat.channelCount, privacy: .public) common=\(nativeFormat.commonFormat.rawValue, privacy: .public) interleaved=\(nativeFormat.isInterleaved, privacy: .public)")
-
-        guard let converter = AVAudioConverter(from: nativeFormat, to: captureFormat) else {
-            throw AudioCaptureError.formatMismatch("Could not build converter from \(nativeFormat) to \(captureFormat).")
-        }
-        // Multichannel mics (5-channel aggregate/interface devices are
-        // common) break AVAudioConverter's implicit N→1 downmix — it emits
-        // silence for >2 input channels. Pin the single mono output channel
-        // to input channel 0 (the conventional primary mic) so we capture
-        // real audio instead of zeros.
-        if nativeFormat.channelCount > 1 {
-            converter.channelMap = [0]
-        }
-        self.converter = converter
-
-        let tapBufferSize = AVAudioFrameCount(
-            nativeFormat.sampleRate * Double(format.frameDurationMs) / 1000.0
-        )
-        input.installTap(onBus: 0, bufferSize: tapBufferSize, format: nativeFormat) { [weak self] buffer, _ in
-            self?.handleInputBuffer(buffer)
-        }
-
-        lock.withLock {
-            pendingBytes.removeAll(keepingCapacity: true)
-            capturing = true
-        }
+        #if os(macOS)
+        ensureInputUnit()
+        ring.reset()
+        pipeline.reset()
+        startConsumerIfNeeded()
+        drive(.startRequested(deviceID: currentDeviceKey(), now: Self.now()))
+        #else
+        throw AudioCaptureError.captureUnavailable
+        #endif
     }
 
-    /// Stop forwarding mic audio. The shared engine keeps running so any
-    /// in-flight playback continues; only the tap is removed.
+    /// Stop capturing the instant the user stops speaking. The AUHAL unit stops
+    /// (mic indicator clears) but stays initialized (warm); playback continues
+    /// on the AVAudioEngine for the reply. This is the #77 fix.
     public func stopCapture() {
-        let wasCapturing: Bool = lock.withLock {
-            let was = capturing
-            capturing = false
-            pendingBytes.removeAll(keepingCapacity: true)
-            return was
-        }
-        guard wasCapturing else { return }
-
-        engine.inputNode.removeTap(onBus: 0)
-        converter = nil
+        #if os(macOS)
+        drive(.stopRequested)
+        #endif
     }
 
     // MARK: - Playback (deltas → speaker)
 
-    /// Schedule a PCM16 24 kHz mono frame for playback, converting it to
-    /// the engine's Float32 format first. Starts the shared engine if
-    /// needed. Buffers play in arrival order.
+    /// Schedule a PCM16 24 kHz mono frame for playback, converting to Float32.
     public func enqueue(pcmData: Data) {
         guard !pcmData.isEmpty else { return }
         do {
-            try ensureEngineStarted()
+            try ensurePlaybackStarted()
         } catch {
             return
         }
-        // A prior `flushPlayback()` stops the player node; re-arm it so
-        // freshly scheduled buffers actually sound.
-        if !player.isPlaying {
-            player.play()
-        }
+        if !player.isPlaying { player.play() }
 
         let sampleCount = pcmData.count / MemoryLayout<Int16>.size
         guard sampleCount > 0,
@@ -273,144 +172,202 @@ public final class RealtimeAudioSession: @unchecked Sendable {
             guard let self else { return }
             let shouldPause: Bool = self.lock.withLock {
                 self.outstandingPlaybackBuffers -= 1
-                return self.stopWhenDrained
-                    && self.outstandingPlaybackBuffers == 0
-                    && !self.capturing
+                return self.stopWhenDrained && self.outstandingPlaybackBuffers == 0
             }
-            // Completion fires on a CoreAudio thread; engine teardown must
-            // hop to the main queue.
             if shouldPause {
-                DispatchQueue.main.async { self.pauseForIdle() }
+                DispatchQueue.main.async { self.pausePlaybackForIdle() }
             }
         }
     }
 
-    /// Release the mic between Voice Turns once the reply audio finishes
-    /// playing and capture is off — PAUSING (not fully stopping) the engine.
-    /// Called when a Voice Turn returns to idle. Pausing clears the macOS
-    /// mic-in-use indicator (verified: orange dot off) and frees other-app
-    /// audio, BUT keeps the audio device warm so the next turn's
-    /// `engine.start()` resumes in ~tens of ms instead of paying the ~1.7s
-    /// cold device-open (measured: 70-270ms warm vs 1700ms cold; issue #73).
-    /// Full release (`stop()`) is reserved for app teardown.
-    public func requestStopWhenDrained() {
-        let pauseNow: Bool = lock.withLock {
-            guard engineStarted else { return false }
-            stopWhenDrained = true
-            return outstandingPlaybackBuffers == 0 && !capturing
-        }
-        if pauseNow { pauseForIdle() }
-    }
-
-    /// Pause the engine between turns: remove the tap, stop the player, and
-    /// `engine.pause()` (NOT `stop()`). Keeps the device warm for a fast
-    /// next-turn resume while clearing the mic indicator. `ensureEngineStarted`
-    /// resumes a paused engine via `engine.start()` (warm). Idempotent.
-    private func pauseForIdle() {
-        let wasStarted: Bool = lock.withLock {
-            let was = engineStarted
-            engineStarted = false
-            capturing = false
-            stopWhenDrained = false
-            outstandingPlaybackBuffers = 0
-            pendingBytes.removeAll(keepingCapacity: true)
-            return was
-        }
-        guard wasStarted else { return }
-
-        engine.inputNode.removeTap(onBus: 0)
-        player.stop()
-        engine.pause()
-        converter = nil
-    }
-
-    /// Decode a base64 chunk straight from the WS event into the playback
-    /// queue. Most callers receive base64.
+    /// Decode a base64 chunk straight from the WS event into the playback queue.
     public func enqueueBase64(_ base64: String) {
         guard let data = Data(base64Encoded: base64) else { return }
         enqueue(pcmData: data)
     }
 
-    /// Drop all queued + playing audio immediately (barge-in). Does not
-    /// stop the engine.
+    /// Drop all queued + playing audio immediately (barge-in). Does not stop the engine.
     public func flushPlayback() {
         player.stop()
     }
 
-    /// Re-arm the player after a `flushPlayback()`. `enqueue` also
-    /// self-arms, so this mostly mirrors the flow's `restartPlayer`.
+    /// Re-arm the player after a `flushPlayback()`.
     public func resumePlayback() {
         guard lock.withLock({ engineStarted }) else { return }
-        if !player.isPlaying {
-            player.play()
+        if !player.isPlaying { player.play() }
+    }
+
+    /// Pause the PLAYBACK engine once the reply audio finishes draining. Capture
+    /// is a separate unit and is already stopped via `stopCapture()`, so this no
+    /// longer governs the mic indicator (that clears at end-of-listening, #77).
+    public func requestStopWhenDrained() {
+        let pauseNow: Bool = lock.withLock {
+            guard engineStarted else { return false }
+            stopWhenDrained = true
+            return outstandingPlaybackBuffers == 0
         }
+        if pauseNow { pausePlaybackForIdle() }
     }
 
     // MARK: - Teardown
 
-    /// Full teardown: remove the tap, stop the player, stop the engine.
-    /// The session can be started again afterwards.
+    /// Full teardown of both capture and playback. The session can start again.
     public func stop() {
+        captureConsumer?.cancel()
+        captureConsumer = nil
+        #if os(macOS)
+        // Serialize with `drive()` so teardown never races an in-flight command
+        // executing on the unit from the consumer task.
+        driveLock.lock()
+        inputUnit?.teardown()
+        driveLock.unlock()
+        #endif
+        ring.reset()
+        pipeline.reset()
+
         let wasStarted: Bool = lock.withLock {
             let was = engineStarted
             engineStarted = false
-            capturing = false
             stopWhenDrained = false
             outstandingPlaybackBuffers = 0
-            pendingBytes.removeAll(keepingCapacity: true)
+            return was
+        }
+        if wasStarted {
+            player.stop()
+            engine.stop()
+        }
+    }
+
+    // MARK: - Playback engine lifecycle
+
+    private func ensurePlaybackStarted() throws {
+        if lock.withLock({ engineStarted }) { return }
+        lock.withLock { stopWhenDrained = false }
+
+        // Attach + connect the player exactly once; the graph survives pause/stop.
+        if player.engine == nil {
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+        }
+        try engine.start()
+        player.play()
+        lock.withLock { engineStarted = true }
+    }
+
+    private func pausePlaybackForIdle() {
+        let wasStarted: Bool = lock.withLock {
+            let was = engineStarted
+            engineStarted = false
+            stopWhenDrained = false
+            outstandingPlaybackBuffers = 0
             return was
         }
         guard wasStarted else { return }
-
-        engine.inputNode.removeTap(onBus: 0)
         player.stop()
-        engine.stop()
-        converter = nil
+        engine.pause()
     }
 
-    // MARK: - Internal
+    // MARK: - Capture orchestration (macOS)
 
-    private func handleInputBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let converter = converter else { return }
-
-        let ratio = captureFormat.sampleRate / buffer.format.sampleRate
-        let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-        guard let outBuffer = AVAudioPCMBuffer(pcmFormat: captureFormat, frameCapacity: outCapacity) else { return }
-
-        var fed = false
-        var error: NSError?
-        let inputBlock: AVAudioConverterInputBlock = { _, statusOut in
-            if fed {
-                statusOut.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            statusOut.pointee = .haveData
-            return buffer
+    #if os(macOS)
+    private func ensureInputUnit() {
+        guard inputUnit == nil else { return }
+        inputUnit = CoreAudioInputUnit(ring: ring) { [weak self] in
+            // Default input device changed (off the RT thread). Bump generation
+            // so the control core rebuilds on the next start.
+            guard let self else { return }
+            self.genLock.lock()
+            self.deviceGeneration += 1
+            let gen = self.deviceGeneration
+            self.genLock.unlock()
+            self.drive(.deviceChanged(generation: gen))
         }
-        converter.convert(to: outBuffer, error: &error, withInputFrom: inputBlock)
-        if error != nil || outBuffer.frameLength == 0 { return }
-
-        let byteCount = Int(outBuffer.frameLength) * Int(captureFormat.channelCount) * MemoryLayout<Int16>.size
-        guard let raw = outBuffer.int16ChannelData?[0] else { return }
-        emitChunked(Data(bytes: raw, count: byteCount))
     }
 
-    private func emitChunked(_ chunk: Data) {
-        let toYield: [Data] = lock.withLock {
-            guard capturing else { return [] }
-            pendingBytes.append(chunk)
+    private func currentDeviceKey() -> String {
+        String(CoreAudioInputUnit.defaultInputDevice())
+    }
 
-            let frameSize = format.bytesPerFrame
-            var out: [Data] = []
-            while pendingBytes.count >= frameSize {
-                out.append(Data(pendingBytes.prefix(frameSize)))
-                pendingBytes.removeFirst(frameSize)
+    /// Single serialized entry point: feed one event to the control core and
+    /// execute the resulting commands. Follow-up events (prepared/unitFailed)
+    /// are appended to the same command pass — no recursion.
+    private func drive(_ event: CaptureControlEvent) {
+        driveLock.lock()
+        defer { driveLock.unlock() }
+        var cmds = control.update(event)
+
+        var i = 0
+        while i < cmds.count {
+            let cmd = cmds[i]
+            i += 1
+            switch cmd {
+            case .prepare(let dev):
+                do {
+                    try inputUnit?.prepare()
+                    cmds.append(contentsOf: control.update(.prepared(deviceID: dev, now: Self.now())))
+                } catch {
+                    audioLog.error("capture prepare failed: \(error.localizedDescription, privacy: .public)")
+                    cmds.append(contentsOf: control.update(.unitFailed))
+                }
+            case .start:
+                do { try inputUnit?.start() }
+                catch { audioLog.error("capture start failed: \(error.localizedDescription, privacy: .public)") }
+            case .stop:
+                inputUnit?.stop()
+            case .reset:
+                inputUnit?.teardown()
+            case .rebuild:
+                audioLog.info("capture: watchdog/device rebuild")
+                inputUnit?.teardown()
+                do {
+                    try inputUnit?.prepare()
+                    try inputUnit?.start()
+                } catch {
+                    audioLog.error("capture rebuild failed: \(error.localizedDescription, privacy: .public)")
+                }
+            case .failTurn:
+                audioLog.error("capture: zero-frame turn — surfacing stall")
+                captureStalledContinuation.yield(())
             }
-            return out
         }
-        for frame in toYield {
-            continuation.yield(frame)
+    }
+
+    private func startConsumerIfNeeded() {
+        guard captureConsumer == nil else { return }
+        captureConsumer = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let scratchCount = 8192
+            let scratch = UnsafeMutablePointer<Float>.allocate(capacity: scratchCount)
+            defer { scratch.deallocate() }
+
+            while !Task.isCancelled {
+                let n = self.ring.read(into: scratch, maxCount: scratchCount)
+                if n > 0 {
+                    // Off the RT thread: wrap mono samples + convert/chunk.
+                    let mono = Array(UnsafeBufferPointer(start: scratch, count: n))
+                    self.pipeline.push(planes: [mono], frameCount: n, format: self.captureNativeFormat())
+                    self.drive(.bufferArrived)
+                    while let frame = self.pipeline.dequeue() {
+                        self.continuation.yield(frame)
+                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: 5_000_000)   // 5 ms idle poll
+                }
+                self.drive(.tick(now: Self.now()))
+            }
         }
+    }
+
+    private func captureNativeFormat() -> NativeCaptureFormat {
+        // Channel 0 is already extracted in the render callback, so the pipeline
+        // sees a single mono plane at the device's native sample rate.
+        let sr = inputUnit?.nativeSampleRate ?? 48_000
+        return NativeCaptureFormat(
+            sampleRate: sr, channelCount: 1, encoding: .float32, layout: .nonInterleaved)
+    }
+    #endif
+
+    private static func now() -> TimeInterval {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
     }
 }
