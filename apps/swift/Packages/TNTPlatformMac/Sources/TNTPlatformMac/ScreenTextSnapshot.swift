@@ -328,6 +328,13 @@ public struct ScreenTextSnapshotBuilder {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return .empty }
         if trimmed.count < 30 { return .sparse }
+        // Single-token text — no whitespace at all — is not real prose or code.
+        // Filenames ("scoreboard-finals-2024.png"), long identifiers, and slugs
+        // all lack word boundaries; a ≥30-char filename must still be .sparse so
+        // the escalation hint fires when vision is available (issue #137).
+        // Real content (code, prose, multi-word UI text) always has spaces or
+        // newlines between tokens.
+        if !trimmed.contains(where: \.isWhitespace) { return .sparse }
         return .ok
     }
 
@@ -360,7 +367,8 @@ public struct ScreenTextSnapshotBuilder {
             + "Sources marked armed_appshot are earlier captures the user deliberately attached — capturedSecondsAgo says how old. "
             + "The fresh_grab source is the user's CURRENT frontmost window. "
             + "If the question is about the current screen but the fresh_grab text is empty or sparse, say that window exposes no readable text and name the armed capture(s) you have instead — do not answer from them as if they were the screen. "
-            + "Some apps (Google Docs, Gmail, image-only windows) expose little or no text."
+            + "Some apps (Google Docs, Gmail, image-only windows) expose little or no text. "
+            + "A filename or window-chrome title alone (e.g. 'scoreboard-finals.png') is NOT sufficient content — treat it as sparse and escalate if vision is available."
         if visionAvailable {
             return base + " If no source can answer the question, call analyze_screen for a vision-capable answer."
         }
