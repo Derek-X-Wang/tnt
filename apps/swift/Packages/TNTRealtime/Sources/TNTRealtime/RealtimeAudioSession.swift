@@ -57,7 +57,13 @@ public final class RealtimeAudioSession: @unchecked Sendable {
     private var engineStarted = false
     private var outstandingPlaybackBuffers = 0
     private var stopWhenDrained = false
+    /// Bumped on every route/config change (#148). Buffer-completion callbacks
+    /// capture the generation at schedule time and only touch shared state when
+    /// it still matches — so a stale completion after a route reset can't
+    /// decrement the new counter or pause a freshly-restarted engine.
+    private var playbackGeneration = 0
     private let lock = NSLock()
+    private var configChangeObserver: NSObjectProtocol?
 
     // MARK: - Capture (AUHAL, macOS)
 
@@ -95,6 +101,38 @@ public final class RealtimeAudioSession: @unchecked Sendable {
         }
         self.playbackFormat = playback
         self.pipeline = NativeCapturePipeline(outputFormat: format)
+
+        // Playback route-change recovery (#148). macOS posts this when the
+        // output (or input) hardware reconfigures — AirPods (dis)connect,
+        // sleep→wake — and AVAudioEngine STOPS + UNINITIALIZES itself. We only
+        // INVALIDATE state here (under lock, no graph mutation on the
+        // notification thread); the next enqueue rebuilds lazily. Bumping the
+        // generation makes in-flight buffer completions no-ops.
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+
+    deinit {
+        if let configChangeObserver {
+            NotificationCenter.default.removeObserver(configChangeObserver)
+        }
+    }
+
+    private func handleConfigurationChange() {
+        lock.withLock {
+            // The engine already auto-stopped + uninitialized. Invalidate so the
+            // next enqueue does a full restart instead of trusting a stale flag.
+            engineStarted = false
+            stopWhenDrained = false
+            outstandingPlaybackBuffers = 0
+            playbackGeneration &+= 1
+        }
+        audioLog.info("playback: AVAudioEngineConfigurationChange — invalidated (gen now bumped); next reply will restart the engine")
     }
 
     // MARK: - Pre-warm
@@ -167,10 +205,16 @@ public final class RealtimeAudioSession: @unchecked Sendable {
                 dst[i] = Float(src[i]) * scale
             }
         }
-        lock.withLock { outstandingPlaybackBuffers += 1 }
+        let scheduledGen = lock.withLock { () -> Int in
+            outstandingPlaybackBuffers += 1
+            return playbackGeneration
+        }
         player.scheduleBuffer(buffer) { [weak self] in
             guard let self else { return }
             let shouldPause: Bool = self.lock.withLock {
+                // Generation-aware (#148): a completion from before a route reset
+                // must not touch the new counter or pause the fresh engine.
+                guard scheduledGen == self.playbackGeneration else { return false }
                 self.outstandingPlaybackBuffers -= 1
                 return self.stopWhenDrained && self.outstandingPlaybackBuffers == 0
             }
@@ -182,7 +226,10 @@ public final class RealtimeAudioSession: @unchecked Sendable {
 
     /// Decode a base64 chunk straight from the WS event into the playback queue.
     public func enqueueBase64(_ base64: String) {
-        guard let data = Data(base64Encoded: base64) else { return }
+        guard let data = Data(base64Encoded: base64) else {
+            audioLog.error("playback: enqueueBase64 decode failed (\(base64.count, privacy: .public) chars)")
+            return
+        }
         enqueue(pcmData: data)
     }
 
@@ -241,17 +288,38 @@ public final class RealtimeAudioSession: @unchecked Sendable {
     // MARK: - Playback engine lifecycle
 
     private func ensurePlaybackStarted() throws {
-        if lock.withLock({ engineStarted }) { return }
-        lock.withLock { stopWhenDrained = false }
+        // Trust BOTH the flag AND reality (#148): a route/config change stops +
+        // uninitializes the engine while `engineStarted` may still read true.
+        // Skipping on the flag alone left a dead engine playing to nothing.
+        if lock.withLock({ engineStarted }) && engine.isRunning { return }
+        lock.withLock {
+            stopWhenDrained = false
+            engineStarted = false   // stale flag after a config-change stop
+        }
 
         // Attach + connect the player exactly once; the graph survives pause/stop.
+        // Keep the player→mixer connection at the model format (24 kHz mono) —
+        // the mixer converts to the current hardware output; re-deriving from the
+        // new output would play at the wrong speed.
         if player.engine == nil {
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
         }
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            audioLog.error("playback: engine.start() failed — \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
         player.play()
-        lock.withLock { engineStarted = true }
+        // Only claim "started" if the engine is actually running. During a route
+        // in flux (e.g. AirPods HFP/A2DP renegotiation) start() can return with
+        // isRunning=false; marking started=true there would strand a dead engine.
+        // Leaving it false makes the next delta retry the start once the route settles.
+        let running = engine.isRunning
+        lock.withLock { engineStarted = running }
+        audioLog.info("playback: engine started (isRunning=\(running, privacy: .public))")
+        if !running { audioLog.error("playback: engine.start() returned but isRunning=false (route in flux) — will retry on next delta") }
     }
 
     private func pausePlaybackForIdle() {
