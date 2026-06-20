@@ -353,7 +353,11 @@ public final class RealtimeAudioSession: @unchecked Sendable {
     }
 
     private func currentDeviceKey() -> String {
-        String(CoreAudioInputUnit.defaultInputDevice())
+        // The RESOLVED capture device (#154), not the raw default — so connecting
+        // a Bluetooth output (AirPods) that doesn't change the resolved mic
+        // (stays built-in) doesn't churn the control core, and the key matches
+        // what the unit actually opens.
+        String(CoreAudioInputUnit.resolvedInputDevice())
     }
 
     /// Single serialized entry point: feed one event to the control core and

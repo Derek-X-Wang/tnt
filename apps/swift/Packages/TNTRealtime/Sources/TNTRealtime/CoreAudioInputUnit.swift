@@ -94,10 +94,12 @@ final class CoreAudioInputUnit: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Create + configure + initialize the unit for the current default input
-    /// device. Idempotent: a no-op if already initialized for that device.
+    /// Create + configure + initialize the unit for the RESOLVED input device.
+    /// Idempotent: a no-op if already initialized for that device. The resolver
+    /// avoids opening a classic-Bluetooth headset as input (HFP thrash, #154) —
+    /// AirPods stay A2DP output while capture uses the built-in mic.
     func prepare() throws {
-        let currentDefault = Self.defaultInputDevice()
+        let currentDefault = Self.resolvedInputDevice()
         if isInitialized, currentDefault == deviceID { return }   // warm, same device
         if isInitialized { teardown() }                            // device changed → rebuild
 
@@ -227,6 +229,98 @@ final class CoreAudioInputUnit: @unchecked Sendable {
         _ = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
         return dev
+    }
+
+    // MARK: - Capture-device resolution (#154)
+
+    /// UserDefaults key for the escape toggle: when true, use the system default
+    /// input exactly (even classic Bluetooth) — honoring a deliberate AirPods-mic
+    /// choice. Default off.
+    static let useSystemDefaultInputKey = "tnt.useSystemDefaultInput"
+
+    /// Resolve the capture device, avoiding a classic-Bluetooth headset as input
+    /// (HFP thrash) unless the user opted in. Pure policy lives in
+    /// `resolveInputDevice`; this gathers the CoreAudio facts it needs.
+    static func resolvedInputDevice() -> AudioDeviceID {
+        let defaultID = defaultInputDevice()
+        let all = allInputDevices()
+        let useSystemDefault = UserDefaults.standard.bool(forKey: useSystemDefaultInputKey)
+        let def = all.first(where: { $0.id == defaultID })
+            ?? (defaultID != 0
+                ? ResolvableInput(id: defaultID, transport: transport(of: defaultID),
+                                  hasInputStreams: hasInputStreams(defaultID))
+                : nil)
+
+        let chosen = resolveInputDevice(systemDefault: def, all: all, useSystemDefault: useSystemDefault)
+            ?? defaultID
+
+        if let d = def, d.transport == .bluetooth, !useSystemDefault {
+            if chosen == defaultID {
+                auhalLog.error("resolveInputDevice: default is classic Bluetooth and no safe non-BT input found — using it (expect HFP/degraded mic)")
+            } else {
+                auhalLog.info("resolveInputDevice: default is classic Bluetooth → using built-in/non-BT input \(chosen, privacy: .public) instead (avoiding HFP)")
+            }
+        }
+        return chosen
+    }
+
+    /// All input-capable devices, reduced to the resolver's plain value type.
+    private static func allInputDevices() -> [ResolvableInput] {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr, size > 0
+        else { return [] }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr
+        else { return [] }
+        return ids.compactMap { id in
+            let hasInput = hasInputStreams(id)
+            guard hasInput else { return nil }   // input-capable only
+            return ResolvableInput(id: id, transport: transport(of: id), hasInputStreams: true)
+        }
+    }
+
+    /// True when the device exposes ≥1 input channel.
+    private static func hasInputStreams(_ deviceID: AudioDeviceID) -> Bool {
+        guard deviceID != 0 else { return false }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &addr, 0, nil, &size) == noErr, size > 0
+        else { return false }
+        let listPtr = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { listPtr.deallocate() }
+        guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, listPtr) == noErr
+        else { return false }
+        let abl = UnsafeMutableAudioBufferListPointer(listPtr.assumingMemoryBound(to: AudioBufferList.self))
+        return abl.reduce(0) { $0 + Int($1.mNumberChannels) } > 0
+    }
+
+    /// Map the device's CoreAudio transport type to the resolver's classification.
+    private static func transport(of deviceID: AudioDeviceID) -> AudioTransport {
+        guard deviceID != 0 else { return .other }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var raw: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &raw) == noErr
+        else { return .other }
+        switch raw {
+        case kAudioDeviceTransportTypeBluetooth:   return .bluetooth
+        case kAudioDeviceTransportTypeBluetoothLE: return .bluetoothLE
+        case kAudioDeviceTransportTypeBuiltIn:     return .builtIn
+        default:                                   return .other
+        }
     }
 
     private static func float32NonInterleaved(sampleRate: Double, channels: UInt32) -> AudioStreamBasicDescription {
