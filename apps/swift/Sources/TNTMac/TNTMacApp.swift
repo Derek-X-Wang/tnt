@@ -171,12 +171,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.voiceTurnController = voiceController
 
-        // Launch mic pre-warm (issue #73): pay the one-time ~1.5s audio-device
-        // cold-open now, in the background, so the user's FIRST Voice Turn
-        // resumes warm instead of clipping. Default-on (PrewarmSetting), and
-        // only when mic permission is ALREADY granted — so a first-ever launch
-        // (pre-onboarding) never triggers the TCC prompt out of context.
-        // Briefly lights the mic indicator at launch (the documented trade).
+        // Launch mic pre-warm (issue #73 / AUHAL #141): initialize the AUHAL
+        // capture unit now, in the background, so the FIRST Voice Turn skips
+        // component setup. AUHAL prepare() does NOT start capture, so — unlike
+        // the old AVAudioEngine prewarm — it does NOT light the mic indicator at
+        // launch. Default-on (PrewarmSetting), and only when mic permission is
+        // ALREADY granted — so a first-ever launch (pre-onboarding) never
+        // triggers the TCC prompt out of context.
         if PrewarmSetting.isEnabled(), PermissionRequester().isMicrophoneGranted() {
             TNTLog.app.info("installRuntime: pre-warming audio device (mic granted, prewarm on)")
             voiceController.prewarmAudio()
