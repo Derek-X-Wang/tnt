@@ -38,6 +38,12 @@ final class VoiceTurnController {
     private var captureStallTask: Task<Void, Never>?
     private var inboundTask: Task<Void, Never>?
 
+    /// Diagnostic (#148): audio deltas + bytes received in the current response.
+    /// Logged on response.done so a silent reply can be triaged — deltas>0 with
+    /// no sound = playback (engine/route); deltas==0 = no model audio (session).
+    private var audioDeltasThisResponse = 0
+    private var audioDeltaBytesThisResponse = 0
+
     /// Count of mic frames forwarded since the current turn's `.startCapture`.
     /// Gates commit/`response.create`: GA `input_audio_buffer.commit` errors
     /// on an empty buffer, and `response.create` against no new user audio
@@ -585,8 +591,13 @@ final class VoiceTurnController {
     private func handle(serverEvent event: RealtimeServerEvent) {
         switch event {
         case .responseAudioDelta(let delta):
+            audioDeltasThisResponse += 1
+            audioDeltaBytesThisResponse += (delta.delta.count * 3) / 4  // approx decoded bytes from base64
             apply(flow.handle(.audioDelta(delta.delta)))
         case .responseDone(let done):
+            TNTLog.voice.info("response audio: \(self.audioDeltasThisResponse, privacy: .public) deltas, ~\(self.audioDeltaBytesThisResponse, privacy: .public) bytes")
+            audioDeltasThisResponse = 0
+            audioDeltaBytesThisResponse = 0
             if toolRoute.suppressesNextDone {
                 // Tier-1 screen-text path: the first response.done after a
                 // read_screen_text is the synthetic fco-response. Suppress it
