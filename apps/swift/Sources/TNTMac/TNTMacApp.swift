@@ -89,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onRetryInputMonitoring: { [weak self] in
                 self?.hotkeyHost?.recheckAuthorization()
             },
+            onCleanRelaunch: { [weak self] in
+                self?.cleanRelaunch()
+            },
             onReplaceAPIKey: { [weak self] in
                 self?.presentReplaceAPIKey()
             },
@@ -243,6 +246,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openInputMonitoringSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!
         NSWorkspace.shared.open(url)
+    }
+
+    /// One-click clean relaunch for #138. After the Screen-Recording-grant
+    /// relaunch leaves the hotkey dead, a fresh launch always restores it (the
+    /// stale per-process TCC cache is gone). Launch via `/usr/bin/open -n`
+    /// against the .app BUNDLE URL so LaunchServices re-parents the new
+    /// instance under launchd — that keeps TCC attribution on the app's own
+    /// stable code signature (launching the inner binary directly would
+    /// misattribute the grant). Then terminate this instance.
+    private func cleanRelaunch() {
+        let bundleURL = Bundle.main.bundleURL
+        TNTLog.app.info("cleanRelaunch: open -n \(bundleURL.path, privacy: .public) then terminate (#138 hotkey recovery)")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", bundleURL.path]
+        do {
+            try task.run()
+        } catch {
+            TNTLog.app.error("cleanRelaunch: failed to launch new instance — \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     /// Hidden DEBUG-only one-shot WS round-trip — kept for M0/S7

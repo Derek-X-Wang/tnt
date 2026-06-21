@@ -54,6 +54,7 @@ public final class MenuBarHost {
         permissionStatus: PermissionStatus = .ok,
         onOpenInputMonitoringSettings: MenuAction? = nil,
         onRetryInputMonitoring: MenuAction? = nil,
+        onCleanRelaunch: MenuAction? = nil,
         onReplaceAPIKey: MenuAction? = nil,
         onTestWSRoundtrip: MenuAction? = nil,
         onCheckForUpdates: MenuAction? = nil,
@@ -66,6 +67,7 @@ public final class MenuBarHost {
         self.forwarder = MenuActionForwarder(
             openSettings: onOpenInputMonitoringSettings,
             retry: onRetryInputMonitoring,
+            cleanRelaunch: onCleanRelaunch,
             replaceAPIKey: onReplaceAPIKey,
             testWSRoundtrip: onTestWSRoundtrip,
             checkForUpdates: onCheckForUpdates,
@@ -175,6 +177,7 @@ public final class MenuBarHost {
 
             forwarder.attachOpenSettingsItem(into: menu)
             forwarder.attachRetryItem(into: menu)
+            forwarder.attachCleanRelaunchItem(into: menu)
         }
 
         if let error = lastErrorMessage {
@@ -321,6 +324,7 @@ private final class MenuActionForwarder: NSObject {
 
     private let openSettingsAction: MenuBarHost.MenuAction?
     private let retryAction: MenuBarHost.MenuAction?
+    private let cleanRelaunchAction: MenuBarHost.MenuAction?
     private let replaceAPIKeyAction: MenuBarHost.MenuAction?
     private let testWSRoundtripAction: MenuBarHost.MenuAction?
     private let checkForUpdatesAction: MenuBarHost.MenuAction?
@@ -331,6 +335,7 @@ private final class MenuActionForwarder: NSObject {
     init(
         openSettings: MenuBarHost.MenuAction?,
         retry: MenuBarHost.MenuAction?,
+        cleanRelaunch: MenuBarHost.MenuAction?,
         replaceAPIKey: MenuBarHost.MenuAction?,
         testWSRoundtrip: MenuBarHost.MenuAction?,
         checkForUpdates: MenuBarHost.MenuAction?,
@@ -340,6 +345,7 @@ private final class MenuActionForwarder: NSObject {
     ) {
         self.openSettingsAction = openSettings
         self.retryAction = retry
+        self.cleanRelaunchAction = cleanRelaunch
         self.replaceAPIKeyAction = replaceAPIKey
         self.testWSRoundtripAction = testWSRoundtrip
         self.checkForUpdatesAction = checkForUpdates
@@ -464,12 +470,30 @@ private final class MenuActionForwarder: NSObject {
         menu.addItem(item)
     }
 
+    /// One-click clean relaunch (#138). After a Screen-Recording-grant relaunch
+    /// leaves the hotkey dead, a fresh launch always restores it (the per-
+    /// process TCC cache is gone). Matches macOS's own "Quit & Reopen" idiom.
+    func attachCleanRelaunchItem(into menu: NSMenu) {
+        guard cleanRelaunchAction != nil else { return }
+        let item = NSMenuItem(
+            title: "Quit & Reopen TNT",
+            action: #selector(cleanRelaunch(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        menu.addItem(item)
+    }
+
     @objc func openSettings(_ sender: NSMenuItem) {
         openSettingsAction?()
     }
 
     @objc func retry(_ sender: NSMenuItem) {
         retryAction?()
+    }
+
+    @objc func cleanRelaunch(_ sender: NSMenuItem) {
+        cleanRelaunchAction?()
     }
 
 #if DEBUG
