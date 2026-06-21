@@ -54,15 +54,41 @@ public final class HotkeyHost {
     private var runLoopSource: CFRunLoopSource?
     private var box: HotkeyHostBox?
 
+    /// Triggers the Input Monitoring first-run prompt (side-effect only — we
+    /// never gate on its result). Injectable for tests; default = the real CG
+    /// call.
+    private let requestListenAccess: () -> Bool
+    /// Installs the `CGEventTap`, returning true on success. `nil` → the real
+    /// installer. Injectable so tests can exercise the #138 stale-TCC retry
+    /// ladder without a live event tap / run loop.
+    private let installTapOverride: (() -> Bool)?
+    /// Schedules a delayed retry. Default = main-queue `asyncAfter`; tests
+    /// inject a synchronous runner.
+    private let retryScheduler: (TimeInterval, @escaping () -> Void) -> Void
+
+    /// Bounded re-probe delays for `tapCreate` after a denied-looking first
+    /// attempt (#138). The Screen-Recording-grant relaunch can leave the
+    /// per-process TCC cache frozen-false *before* tccd commits, so we re-probe
+    /// `tapCreate` (which reads LIVE TCC) a few times before reporting denied.
+    private static let tapRetryDelays: [TimeInterval] = [0.5, 1.5]
+
     public init(
         chord: HotkeyChord,
         appshotChord: HotkeyChord? = nil,
         configuration: HotkeyGestureRecognizer.Configuration = .init(),
+        requestListenAccess: @escaping () -> Bool = { CGRequestListenEventAccess() },
+        installTap: (() -> Bool)? = nil,
+        retryScheduler: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, work in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        },
         listener: @escaping Listener
     ) {
         self.chord = chord
         self.appshotChord = appshotChord
         self.recognizer = HotkeyGestureRecognizer(configuration: configuration)
+        self.requestListenAccess = requestListenAccess
+        self.installTapOverride = installTap
+        self.retryScheduler = retryScheduler
         self.listener = listener
     }
 
@@ -81,27 +107,53 @@ public final class HotkeyHost {
             return
         }
 
-        // `CGRequestListenEventAccess()` triggers the system prompt the
-        // first time it's called for a given app, then short-circuits to
-        // a cached answer. Calling it before `tapCreate` keeps the prompt
-        // attached to the user's first press rather than the OS's idle
-        // background detection.
+        // `CGRequestListenEventAccess()` triggers the system prompt the first
+        // time it's called for a given app, then short-circuits to a cached
+        // answer. We call it ONLY for that prompt side-effect — we do NOT gate
+        // on its result. After the Screen-Recording-grant relaunch (#138) it
+        // returns a STALE false: the per-process TCC cache froze before tccd
+        // committed, even though Input Monitoring is granted in the live TCC
+        // db. `CGEvent.tapCreate` reads LIVE TCC per call (it is not subject to
+        // that frozen cache), so the tap itself — not this cached bool — is the
+        // source of truth for authorization. (Apple DTS / forums 735204.)
         let preflight = CGPreflightListenEventAccess()
-        let granted = CGRequestListenEventAccess()
-        TNTLog.hotkey.info("start: chord=\(self.chord.displayString, privacy: .public) preflight=\(preflight) requestAccess=\(granted)")
-        guard granted else {
-            TNTLog.hotkey.error("start: Input Monitoring NOT granted — tap not installed. Grant in System Settings › Privacy & Security › Input Monitoring, then relaunch or Retry.")
+        let requested = requestListenAccess()
+        TNTLog.hotkey.info("start: chord=\(self.chord.displayString, privacy: .public) preflight=\(preflight) requestAccess=\(requested)")
+
+        attemptInstall(remainingDelays: Self.tapRetryDelays, requested: requested)
+    }
+
+    /// Try to install the tap; on failure re-probe `tapCreate` after a bounded
+    /// set of delays before reporting `.denied`. The first attempt is
+    /// immediate; the retries cover the residual window where the live TCC
+    /// grant is not yet visible *anywhere* right after the SR-grant relaunch
+    /// (#138) — re-probing `tapCreate`, never the frozen `requestAccess`.
+    private func attemptInstall(remainingDelays: [TimeInterval], requested: Bool) {
+        guard eventTap == nil else { return }  // a concurrent success / Retry won
+
+        if installTap() {
+            TNTLog.hotkey.info("start: event tap installed + enabled, authorization granted (requestAccess=\(requested))")
+            updateAuthorization(.granted)
+            return
+        }
+
+        guard let nextDelay = remainingDelays.first else {
+            TNTLog.hotkey.error("start: tapCreate returned nil after retries — Input Monitoring not granted. Grant in System Settings › Privacy & Security › Input Monitoring, then Retry or Quit & Reopen.")
             updateAuthorization(.denied)
             return
         }
 
-        guard installEventTap() else {
-            TNTLog.hotkey.error("start: CGEvent.tapCreate returned nil — tap install failed despite access granted")
-            updateAuthorization(.denied)
-            return
+        let rest = Array(remainingDelays.dropFirst())
+        TNTLog.hotkey.info("start: tapCreate nil — re-probing live TCC in \(nextDelay)s (stale cache after Screen Recording grant?)")
+        retryScheduler(nextDelay) { [weak self] in
+            self?.attemptInstall(remainingDelays: rest, requested: requested)
         }
-        TNTLog.hotkey.info("start: event tap installed + enabled, authorization granted")
-        updateAuthorization(.granted)
+    }
+
+    /// Real-or-injected tap installer. The override lets tests drive the
+    /// authorization/retry logic without a live `CGEventTap` + run loop.
+    private func installTap() -> Bool {
+        installTapOverride?() ?? installEventTap()
     }
 
     /// Tear down the event tap. Idempotent.
@@ -118,10 +170,23 @@ public final class HotkeyHost {
     }
 
     /// Re-attempt installing the tap. The "Retry" menu item calls this
-    /// after the user grants Input Monitoring in System Settings.
+    /// after the user grants Input Monitoring in System Settings. Works
+    /// in-process now (#138): `start()` probes the live-TCC `tapCreate`
+    /// rather than the frozen `CGRequestListenEventAccess` cache.
     public func recheckAuthorization() {
         stop()
         start()
+    }
+
+    /// Re-enable the tap after macOS disables it (Secure Input focus, system
+    /// sleep/wake, or a slow callback). A non-nil tap that has been disabled
+    /// delivers no events until re-enabled — "a non-nil tap is not a healthy
+    /// tap." Called from the tap callback on `kCGEventTapDisabledBy*`.
+    fileprivate func reEnableTap() {
+        guard let tap = eventTap else { return }
+        guard !CGEvent.tapIsEnabled(tap: tap) else { return }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        TNTLog.hotkey.info("re-enabled event tap after system disable (Secure Input / sleep-wake)")
     }
 
     // MARK: - Tap installation
@@ -235,6 +300,16 @@ private let hotkeyTapCallback: CGEventTapCallBack = { _, type, event, userInfo i
         return Unmanaged.passUnretained(event)
     }
     let box = Unmanaged<HotkeyHostBox>.fromOpaque(userInfo).takeUnretainedValue()
+
+    // macOS disables the tap on Secure Input focus, sleep/wake, or a slow
+    // callback; these arrive as out-of-band event types (not key events).
+    // Re-enable on the main actor so the hotkey survives without a relaunch.
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { box.host?.reEnableTap() }
+        }
+        return Unmanaged.passUnretained(event)
+    }
 
     let now = CFAbsoluteTimeGetCurrent()
     let flags = event.flags
