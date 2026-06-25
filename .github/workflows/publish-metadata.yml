@@ -205,18 +205,20 @@ jobs:
         # re-running this workflow via workflow_dispatch.
         continue-on-error: true
         env:
-          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "$HOMEBREW_TAP_PAT" ]; then
-            echo "::error::HOMEBREW_TAP_PAT secret must be set. See docs/release.md (#one-time-setup)."
+          if [ -z "$TAP_GITHUB_TOKEN" ]; then
+            echo "::error::TAP_GITHUB_TOKEN secret must be set. See docs/release.md (#one-time-setup)."
             exit 1
           fi
 
           VERSION="${{ steps.tag.outputs.version }}"
           TAG="${{ steps.tag.outputs.tag }}"
-          BUMP_BRANCH="bump-${TAG}"
+          # Namespace the branch with the tool so it never collides with
+          # another project's bump-* branch on the shared homebrew-tap.
+          BUMP_BRANCH="bump-tnt-${TAG}"
           REPO_OWNER="${GITHUB_REPOSITORY%%/*}"
 
           # 1. Download the signed dmg from the release so we can compute
@@ -230,10 +232,13 @@ jobs:
           DMG_SHA=$(shasum -a 256 "/tmp/tap-assets/TNT-${VERSION}.dmg" | awk '{print $1}')
           echo "computed dmg sha256: $DMG_SHA"
 
-          # 2. Clone the tap with PAT so we can push. Fine-scoped PAT
-          #    covers only Derek-X-Wang/homebrew-tnt (Contents+PRs RW).
+          # 2. Clone the shared tap with the PAT so we can push. The
+          #    fine-scoped TAP_GITHUB_TOKEN covers Derek-X-Wang/homebrew-tap
+          #    (shared with uncluster) + scoop-bucket only. TNT only ever
+          #    writes its own Casks/tnt.rb + Formula/tnt.rb here — never
+          #    another tool's files.
           git clone --depth 1 \
-            "https://x-access-token:${HOMEBREW_TAP_PAT}@github.com/${REPO_OWNER}/homebrew-tnt.git" \
+            "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/${REPO_OWNER}/homebrew-tap.git" \
             tap
           cd tap
           git config user.name  "github-actions[bot]"
@@ -253,10 +258,10 @@ jobs:
             --cask-out tap/Casks/tnt.rb \
             --formula-out tap/Formula/tnt.rb
 
-          # 4. Commit + push the bump branch. The branch is owned by
-          #    this workflow alone (no human writes to bump-*), so a
-          #    -f push on replay is safe and re-bases on the current
-          #    tap main without conflicts.
+          # 4. Commit + push the bump branch. The bump-tnt-* branch is
+          #    owned by this workflow alone (no human, no other tool's
+          #    pipeline writes it), so a -f push on replay is safe and
+          #    re-bases on the current shared-tap main without conflicts.
           cd tap
           git add Casks/tnt.rb Formula/tnt.rb
           if git diff --staged --quiet; then
@@ -276,11 +281,11 @@ jobs:
           # 5. Open PR on the tap repo (idempotent — skip if one is
           #    already open against the bump-<tag> branch).
           EXISTING=$(gh pr list \
-            --repo "${REPO_OWNER}/homebrew-tnt" \
+            --repo "${REPO_OWNER}/homebrew-tap" \
             --head "$BUMP_BRANCH" \
             --json number --jq 'length')
           if [ "$EXISTING" != "0" ]; then
-            echo "PR for ${BUMP_BRANCH} already open on ${REPO_OWNER}/homebrew-tnt"
+            echo "PR for ${BUMP_BRANCH} already open on ${REPO_OWNER}/homebrew-tap"
             exit 0
           fi
           PR_BODY=/tmp/tap-pr-body.md
@@ -299,7 +304,7 @@ jobs:
             echo "(see Derek-X-Wang/tnt#10)."
           } > "$PR_BODY"
           gh pr create \
-            --repo "${REPO_OWNER}/homebrew-tnt" \
+            --repo "${REPO_OWNER}/homebrew-tap" \
             --base main \
             --head "$BUMP_BRANCH" \
             --title "bump tnt to ${TAG}" \
@@ -308,8 +313,8 @@ jobs:
       - name: Open tracking issue on tap-bump failure
         # If the bump step continued-on-error, surface it as an issue on
         # the main tnt repo so the maintainer notices. Uses the default
-        # github.token because HOMEBREW_TAP_PAT is fine-scoped to the
-        # tap repo and cannot create issues on Derek-X-Wang/tnt.
+        # github.token because TAP_GITHUB_TOKEN is fine-scoped to the
+        # shared tap repo and cannot create issues on Derek-X-Wang/tnt.
         if: steps.bump.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -328,7 +333,7 @@ jobs:
             echo
             echo "## Recovery"
             echo
-            echo "1. Confirm \`HOMEBREW_TAP_PAT\` is still valid (Settings → Secrets and"
+            echo "1. Confirm \`TAP_GITHUB_TOKEN\` is still valid (Settings → Secrets and"
             echo "   variables → Actions). See \`docs/release.md\` (One-time setup →"
             echo "   Homebrew tap PAT)."
             echo "2. Re-run the workflow:"

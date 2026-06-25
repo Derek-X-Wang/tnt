@@ -88,10 +88,10 @@ If `DIRTY` persists after a clean rebase, message `BLOCKED issue #<n>` with diag
 
 The work falls into two PRs unless you keep them tight enough to land as one. Prefer **one PR**:
 
-- Extend `.github/workflows/publish-metadata.yml` with a `tap-bump` job mirroring the ctxfs pattern (clone `Derek-X-Wang/homebrew-tnt`, render Cask via `scripts/render-homebrew.py`, commit + push on a `bump-<tag>` branch, open PR via `gh pr create` against the tap repo's `main`).
-- Document the new `HOMEBREW_TAP_PAT` GitHub Actions secret in `docs/release.md` — fine-scoped PAT with write access to `Derek-X-Wang/homebrew-tnt` only.
-- DO NOT actually rotate or set `HOMEBREW_TAP_PAT`. That's HITL — the maintainer adds the secret manually after the PR lands.
-- The tap repo (`Derek-X-Wang/homebrew-tnt`) already exists with `Casks/` + `Formula/` + README scaffolded — don't try to create it.
+- Extend `.github/workflows/publish-metadata.yml` with a `tap-bump` job mirroring the ctxfs pattern (clone the shared `Derek-X-Wang/homebrew-tap`, render Cask via `scripts/render-homebrew.py`, commit + push on a `bump-tnt-<tag>` branch, open PR via `gh pr create` against the tap repo's `main`).
+- Document the `TAP_GITHUB_TOKEN` GitHub Actions secret in `docs/release.md` — one shared fine-scoped PAT with write access to `Derek-X-Wang/homebrew-tap` (+ scoop-bucket) only, reused across projects.
+- DO NOT actually rotate or set `TAP_GITHUB_TOKEN`. That's HITL — the maintainer adds the secret manually after the PR lands.
+- The shared tap repo (`Derek-X-Wang/homebrew-tap`) already exists with `Casks/` + README scaffolded and serves other tools too — only ever write `Casks/tnt.rb` + `Formula/tnt.rb`, never another tool's files; don't try to create the repo.
 - `brew style --cask` and `brew audit --cask --strict` validation against an actual rendered formula is fine to defer to the first real release (#10 AC notes both checks; comment that in the PR test plan).
 
 ## Communication protocol

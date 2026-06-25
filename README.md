@@ -11,7 +11,7 @@ v0 in active development. See [`docs/roadmap.md`](./docs/roadmap.md) for milesto
 Once the first signed alpha ships, the recommended path is Homebrew:
 
 ```sh
-brew tap Derek-X-Wang/tnt
+brew tap Derek-X-Wang/tap
 brew install --cask tnt
 ```
 

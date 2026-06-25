@@ -61,28 +61,29 @@ class PublishMetadataWorkflowTests(unittest.TestCase):
             "generate Casks/tnt.rb.",
         )
 
-    def test_tap_bump_uses_homebrew_tap_pat_secret(self) -> None:
+    def test_tap_bump_uses_tap_github_token_secret(self) -> None:
         steps = self.doc["jobs"]["tap-bump"]["steps"]
-        # The PAT is required to push to Derek-X-Wang/homebrew-tnt and
-        # to open the PR against that repo (default GITHUB_TOKEN can't
-        # cross-repo write).
+        # The PAT is required to push to the shared Derek-X-Wang/homebrew-tap
+        # and to open the PR against that repo (default GITHUB_TOKEN can't
+        # cross-repo write). Named TAP_GITHUB_TOKEN to match uncluster's
+        # workflow — one shared fine-grained PAT serves both tools.
         env_references_secret = any(
-            "HOMEBREW_TAP_PAT" in str(step.get("env") or "")
+            "TAP_GITHUB_TOKEN" in str(step.get("env") or "")
             for step in steps
         )
         self.assertTrue(
             env_references_secret,
-            "tap-bump must read secrets.HOMEBREW_TAP_PAT via env.",
+            "tap-bump must read secrets.TAP_GITHUB_TOKEN via env.",
         )
 
-    def test_tap_bump_clones_homebrew_tnt_repo(self) -> None:
+    def test_tap_bump_clones_shared_homebrew_tap_repo(self) -> None:
         steps = self.doc["jobs"]["tap-bump"]["steps"]
         self.assertTrue(
             any(
-                "homebrew-tnt" in (step.get("run") or "")
+                "homebrew-tap" in (step.get("run") or "")
                 for step in steps
             ),
-            "tap-bump must clone Derek-X-Wang/homebrew-tnt.",
+            "tap-bump must clone the shared Derek-X-Wang/homebrew-tap.",
         )
 
     def test_tap_bump_opens_pr_on_tap_repo(self) -> None:
@@ -90,10 +91,10 @@ class PublishMetadataWorkflowTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "gh pr create" in (step.get("run") or "")
-                and "homebrew-tnt" in (step.get("run") or "")
+                and "homebrew-tap" in (step.get("run") or "")
                 for step in steps
             ),
-            "tap-bump must run `gh pr create --repo Derek-X-Wang/homebrew-tnt`.",
+            "tap-bump must run `gh pr create --repo Derek-X-Wang/homebrew-tap`.",
         )
 
     def test_tap_bump_uses_bump_tag_branch_naming(self) -> None:
@@ -118,7 +119,7 @@ class PublishMetadataWorkflowTests(unittest.TestCase):
     def test_tap_bump_has_failure_tracking_issue_step(self) -> None:
         steps = self.doc["jobs"]["tap-bump"]["steps"]
         # The failure path step must file an issue on the main tnt repo
-        # using github.token (the PAT is fine-scoped to homebrew-tnt and
+        # using github.token (the PAT is fine-scoped to homebrew-tap and
         # cannot create issues on Derek-X-Wang/tnt).
         self.assertTrue(
             any(
