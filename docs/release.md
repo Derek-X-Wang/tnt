@@ -83,32 +83,38 @@ git checkout main
 
 In repo Settings → Pages, set source to `gh-pages` / `/ (root)`. The first time `publish-metadata.yml` runs, it seeds `appcast.xml` if missing.
 
-### 5. Homebrew tap PAT
+### 5. Homebrew tap PAT (`TAP_GITHUB_TOKEN`)
 
-The `tap-bump` job in `publish-metadata.yml` opens a PR on `Derek-X-Wang/homebrew-tnt` bumping `Casks/tnt.rb` to the new release. The default `GITHUB_TOKEN` only writes to the repo the workflow runs in, so a separate fine-scoped Personal Access Token is required.
+The `tap-bump` job in `publish-metadata.yml` opens a PR on the **shared** tap `Derek-X-Wang/homebrew-tap` bumping `Casks/tnt.rb` (and the placeholder `Formula/tnt.rb`) to the new release. The default `GITHUB_TOKEN` only writes to the repo the workflow runs in, so a separate fine-scoped Personal Access Token is required.
 
-The tap repo (`Derek-X-Wang/homebrew-tnt`) already exists, public, with `Casks/` + `Formula/` + README scaffolded — there is nothing to create.
+`Derek-X-Wang/homebrew-tap` is the consolidated tap shared across projects (it also serves `uncluster`). Each project owns only its own `.rb` file(s); TNT touches `Casks/tnt.rb` + `Formula/tnt.rb` and never another tool's files. Users run `brew tap derek-x-wang/tap` once, then `brew install --cask tnt`.
 
-**Mint the PAT** (do this once, then rotate when the expiry warning fires):
+The same fine-grained PAT is shared with `uncluster` — scoped to `homebrew-tap` (+ scoop-bucket) only. If it is already set (e.g. you configured uncluster first), reuse the same string here; you do not mint a per-project PAT anymore.
+
+**Mint the PAT** (do this once; rotate when the expiry warning fires):
 
 1. <https://github.com/settings/personal-access-tokens/new> → **Fine-grained tokens** → **Generate new token**.
-2. **Token name**: `tnt-tap-bump` (or similar).
+2. **Token name**: `shared-tap-bump` (or similar).
 3. **Expiration**: 1 year (calendar a reminder; rotation is the only thing that can stop the pipeline silently).
 4. **Resource owner**: `Derek-X-Wang`.
-5. **Repository access** → **Only select repositories** → pick **`Derek-X-Wang/homebrew-tnt`** (and nothing else — least privilege).
+5. **Repository access** → **Only select repositories** → pick **`Derek-X-Wang/homebrew-tap`** (and `Derek-X-Wang/scoop-bucket` if you publish Scoop too — nothing else, least privilege).
 6. **Repository permissions**:
-   - **Contents**: Read and write (commit + push the `bump-<tag>` branch).
+   - **Contents**: Read and write (commit + push the `bump-tnt-<tag>` branch).
    - **Pull requests**: Read and write (open the bump PR via `gh pr create`).
    - Leave everything else at "No access."
 7. Generate → copy the `github_pat_…` string (shown only once).
 
 Add it as a GitHub Actions secret on the **tnt** repo (not the tap repo):
 
+```bash
+gh secret set TAP_GITHUB_TOKEN   # paste the shared github_pat_… string
+```
+
 | Secret | Value |
 | --- | --- |
-| `HOMEBREW_TAP_PAT` | the `github_pat_…` string from the step above |
+| `TAP_GITHUB_TOKEN` | the shared `github_pat_…` string scoped to `homebrew-tap` |
 
-The workflow uses this PAT to both push the bump branch and to call `gh pr create --repo Derek-X-Wang/homebrew-tnt`. The follow-up "open tracking issue on tap-bump failure" step uses the default `github.token` because that issue lives back on `Derek-X-Wang/tnt`, which the fine-scoped PAT cannot reach by design.
+The workflow uses this PAT to both push the bump branch and to call `gh pr create --repo Derek-X-Wang/homebrew-tap`. The follow-up "open tracking issue on tap-bump failure" step uses the default `github.token` because that issue lives back on `Derek-X-Wang/tnt`, which the fine-scoped PAT cannot reach by design.
 
 If this secret is missing or expired, the appcast still publishes (jobs are serialized — appcast first) but the tap-bump step fails loudly and files a tracking issue on this repo so you notice.
 
